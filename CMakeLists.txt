@@ -29,7 +29,7 @@ target_include_directories(hytgraph_runtime PUBLIC
 )
 
 target_compile_definitions(hytgraph_runtime PUBLIC
-    HYTGRAPH_PROJECT_VERSION=\"${PROJECT_VERSION}\"
+    HYTGRAPH_PROJECT_VERSION="${PROJECT_VERSION}"
 )
 
 if(HYTGRAPH_ENABLE_WARNINGS)
@@ -40,18 +40,45 @@ if(HYTGRAPH_ENABLE_WARNINGS)
     endif()
 endif()
 
-add_executable(hytgraph_dummy
-    src/main.cpp
+add_library(hytgraph_algorithms
+    src/algorithms/pagerank.cpp
+    src/algorithms/sssp.cpp
 )
-target_link_libraries(hytgraph_dummy PRIVATE hytgraph_runtime)
+target_include_directories(hytgraph_algorithms PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(hytgraph_algorithms PUBLIC
+    hytgraph_runtime
+)
+
+if(HYTGRAPH_ENABLE_WARNINGS)
+    if(MSVC)
+        target_compile_options(hytgraph_algorithms PRIVATE /W4)
+    else()
+        target_compile_options(hytgraph_algorithms PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
 
 # The CUDA target is intentionally present even on machines without nvcc.
-# When CUDA is available it builds a real smoke-test executable; otherwise it
-# remains a buildable placeholder so CI can still validate the project shape.
+# When CUDA is available it builds the real baseline GPU implementations;
+# otherwise it keeps a placeholder target so CPU-only environments can still
+# validate the project shape.
 if(HYTGRAPH_ENABLE_CUDA)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
+        find_package(CUDAToolkit REQUIRED)
+
+        target_sources(hytgraph_algorithms PRIVATE
+            cuda/pagerank.cu
+            cuda/sssp.cu
+        )
+        target_link_libraries(hytgraph_algorithms PUBLIC CUDA::cudart)
+        set_target_properties(hytgraph_algorithms PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+        )
+
         add_executable(hytgraph_cuda
             cuda/smoke.cu
         )
@@ -59,14 +86,28 @@ if(HYTGRAPH_ENABLE_CUDA)
             CUDA_STANDARD 17
             CUDA_STANDARD_REQUIRED ON
         )
+        target_link_libraries(hytgraph_cuda PRIVATE CUDA::cudart)
     else()
-        message(STATUS "CUDA compiler not found; hytgraph_cuda will be a placeholder target")
+        message(STATUS "CUDA compiler not found; GPU implementations will be unavailable")
+        target_sources(hytgraph_algorithms PRIVATE
+            src/algorithms/gpu_stub.cpp
+        )
+
         add_custom_target(hytgraph_cuda
             COMMAND ${CMAKE_COMMAND} -E echo "HyTGraph CUDA target: nvcc not available; CUDA compilation skipped."
             VERBATIM
         )
     endif()
+else()
+    target_sources(hytgraph_algorithms PRIVATE
+        src/algorithms/gpu_stub.cpp
+    )
 endif()
+
+add_executable(hytgraph_dummy
+    src/main.cpp
+)
+target_link_libraries(hytgraph_dummy PRIVATE hytgraph_runtime)
 
 if(HYTGRAPH_BUILD_TESTS)
     enable_testing()
@@ -76,6 +117,30 @@ if(HYTGRAPH_BUILD_TESTS)
     )
     target_link_libraries(hytgraph_unit_tests PRIVATE hytgraph_runtime)
     add_test(NAME unit_tests COMMAND hytgraph_unit_tests)
+
+    add_executable(hytgraph_algorithm_tests
+        tests/algorithm_tests.cpp
+    )
+    target_link_libraries(hytgraph_algorithm_tests PRIVATE hytgraph_algorithms)
+    add_test(NAME algorithm_tests COMMAND hytgraph_algorithm_tests)
+
+    if(CMAKE_CUDA_COMPILER)
+        add_executable(hytgraph_cuda_algorithm_tests
+            tests/cuda_algorithm_tests.cu
+        )
+        set_target_properties(hytgraph_cuda_algorithm_tests PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+        )
+        target_link_libraries(hytgraph_cuda_algorithm_tests PRIVATE
+            hytgraph_algorithms
+            CUDA::cudart
+        )
+        add_test(NAME cuda_algorithm_tests COMMAND hytgraph_cuda_algorithm_tests)
+        set_tests_properties(cuda_algorithm_tests PROPERTIES
+            SKIP_RETURN_CODE 77
+        )
+    endif()
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(
@@ -88,7 +153,7 @@ if(HYTGRAPH_BUILD_TESTS)
     )
 endif()
 
-install(TARGETS hytgraph_dummy hytgraph_runtime
+install(TARGETS hytgraph_dummy hytgraph_runtime hytgraph_algorithms
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib

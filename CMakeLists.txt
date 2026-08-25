@@ -21,6 +21,8 @@ add_library(hytgraph_runtime
     src/runtime/config.cpp
     src/runtime/logging.cpp
     src/runtime/result.cpp
+    src/graph/csr_graph.cpp
+    src/graph/graph_loader.cpp
 )
 target_include_directories(hytgraph_runtime PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

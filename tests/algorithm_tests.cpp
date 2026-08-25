@@ -1,5 +1,6 @@
 #include "algorithms/pagerank.hpp"
 #include "algorithms/sssp.hpp"
+#include "graph/activity_tracker.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -204,6 +205,396 @@ namespace
         expect(threw, "SSSP rejects out-of-range source");
     }
 
+    void test_activity_tracker_basic()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+
+        // Graph:
+        //
+        // 0 -> 1, 2
+        // 1 -> 2
+        // 2 -> 0
+        // 3 -> nothing
+        //
+        // Out-degrees:
+        // 0: 2
+        // 1: 1
+        // 2: 1
+        // 3: 0
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 4},
+            {1, 2, 2, 0});
+
+        ActivityTracker activity(graph.num_vertices());
+
+        expect(activity.vertex_count() == 4,
+               "activity tracker vertex count");
+
+        expect(activity.active_vertex_count() == 0,
+               "activity tracker starts with no active vertices");
+
+        expect(activity.active_edge_count(graph) == 0,
+               "no active vertices means no active edges");
+
+        activity.set_active(0);
+        activity.set_active(2);
+
+        expect(activity.is_active(0),
+               "vertex 0 is active");
+
+        expect(activity.is_active(2),
+               "vertex 2 is active");
+
+        expect(!activity.is_active(1),
+               "vertex 1 remains inactive");
+
+        expect(activity.active_vertex_count() == 2,
+               "active vertex count");
+
+        // Active edges = out_degree(0) + out_degree(2)
+        //              = 2 + 1
+        //              = 3.
+        expect(activity.active_edge_count(graph) == 3,
+               "active edge count");
+
+        const auto vertices = activity.active_vertices();
+
+        expect(vertices.size() == 2,
+               "active vertex list size");
+
+        expect(vertices[0] == 0,
+               "active vertex list first vertex");
+
+        expect(vertices[1] == 2,
+               "active vertex list second vertex");
+    }
+
+    void test_activity_tracker_duplicate_activation()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 2},
+            {1, 2});
+
+        ActivityTracker activity(graph.num_vertices());
+
+        activity.set_active(1);
+        activity.set_active(1);
+        activity.set_active(1);
+
+        expect(activity.active_vertex_count() == 1,
+               "duplicate activation does not increase count");
+
+        expect(activity.active_edge_count(graph) == 1,
+               "duplicate activation does not duplicate edges");
+
+        activity.set_active(1, false);
+
+        expect(activity.active_vertex_count() == 0,
+               "deactivation updates active count");
+
+        expect(activity.active_edge_count(graph) == 0,
+               "deactivation removes active edges");
+
+        activity.set_active(1, false);
+
+        expect(activity.active_vertex_count() == 0,
+               "duplicate deactivation is harmless");
+    }
+
+    void test_activity_tracker_set_active_vertices()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 4},
+            {1, 2, 2, 0});
+
+        ActivityTracker activity(graph.num_vertices());
+
+        activity.set_active_vertices({3, 0, 3});
+
+        expect(activity.active_vertex_count() == 2,
+               "set_active_vertices removes duplicate effect");
+
+        expect(activity.is_active(0),
+               "set_active_vertices activates vertex 0");
+
+        expect(activity.is_active(3),
+               "set_active_vertices activates vertex 3");
+
+        expect(activity.active_edge_count(graph) == 2,
+               "active edge count after replacing activity");
+
+        activity.set_active_vertices({1});
+
+        expect(activity.active_vertex_count() == 1,
+               "set_active_vertices replaces previous activity");
+
+        expect(!activity.is_active(0),
+               "previously active vertex is cleared");
+
+        expect(activity.is_active(1),
+               "new active vertex is present");
+
+        expect(activity.active_edge_count(graph) == 1,
+               "active edge count after replacement");
+    }
+
+    void test_activity_tracker_clear()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 2},
+            {1, 2});
+
+        ActivityTracker activity(graph.num_vertices());
+
+        activity.set_active_vertices({0, 1});
+
+        expect(activity.active_vertex_count() == 2,
+               "activity populated before clear");
+
+        activity.clear();
+
+        expect(activity.active_vertex_count() == 0,
+               "clear removes all active vertices");
+
+        expect(activity.active_vertices().empty(),
+               "clear produces empty active vertex list");
+
+        expect(activity.active_edge_count(graph) == 0,
+               "clear removes all active edges");
+    }
+
+    void test_activity_tracker_partition_statistics()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+
+        // Graph:
+        //
+        // 0 -> 1, 2       degree 2
+        // 1 -> 2         degree 1
+        // 2 -> 0         degree 1
+        // 3 -> nothing    degree 0
+        //
+        // Partition 0: vertices [0, 2)
+        // Partition 1: vertices [2, 4)
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 4},
+            {1, 2, 2, 0});
+
+        ActivityTracker activity(graph.num_vertices());
+
+        // Active vertices are 0 and 2.
+        activity.set_active_vertices({0, 2});
+
+        const std::vector<ActivityTracker::VertexRange> partitions = {
+            {0, 2},
+            {2, 4}};
+
+        const auto statistics =
+            activity.partition_statistics(graph, partitions);
+
+        expect(statistics.size() == 2,
+               "partition statistics count");
+
+        // Partition 0:
+        // vertices 0 and 1
+        // total edges = 2 + 1 = 3
+        // active vertices = {0}
+        // active edges = 2
+        expect(statistics[0].total_edges == 3,
+               "partition 0 total edges");
+
+        expect(statistics[0].active_vertices == 1,
+               "partition 0 active vertices");
+
+        expect(statistics[0].active_edges == 2,
+               "partition 0 active edges");
+
+        expect(statistics[0].has_active_vertices(),
+               "partition 0 reports active vertices");
+
+        expect(statistics[0].has_active_edges(),
+               "partition 0 reports active edges");
+
+        // Partition 1:
+        // vertices 2 and 3
+        // total edges = 1 + 0 = 1
+        // active vertices = {2}
+        // active edges = 1
+        expect(statistics[1].total_edges == 1,
+               "partition 1 total edges");
+
+        expect(statistics[1].active_vertices == 1,
+               "partition 1 active vertices");
+
+        expect(statistics[1].active_edges == 1,
+               "partition 1 active edges");
+
+        expect(statistics[1].has_active_vertices(),
+               "partition 1 reports active vertices");
+
+        expect(statistics[1].has_active_edges(),
+               "partition 1 reports active edges");
+    }
+
+    void test_activity_tracker_empty_partition()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 2},
+            {1, 2});
+
+        ActivityTracker activity(graph.num_vertices());
+
+        activity.set_active(0);
+
+        const std::vector<ActivityTracker::VertexRange> partitions = {
+            {0, 1},
+            {1, 3},
+            {2, 2}};
+
+        const auto statistics =
+            activity.partition_statistics(graph, partitions);
+
+        expect(statistics.size() == 3,
+               "empty partition statistics count");
+
+        expect(statistics[0].active_vertices == 1,
+               "first partition active vertex count");
+
+        expect(statistics[0].active_edges == 1,
+               "first partition active edge count");
+
+        expect(statistics[1].active_vertices == 0,
+               "second partition has no active vertices");
+
+        expect(statistics[1].active_edges == 0,
+               "second partition has no active edges");
+
+        expect(statistics[2].active_vertices == 0,
+               "empty partition has no active vertices");
+
+        expect(statistics[2].active_edges == 0,
+               "empty partition has no active edges");
+
+        expect(statistics[2].total_edges == 0,
+               "empty partition has no total edges");
+    }
+
+    void test_activity_tracker_invalid_inputs()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 2},
+            {1, 2});
+
+        ActivityTracker activity(graph.num_vertices());
+
+        bool threw = false;
+
+        try
+        {
+            activity.set_active(3);
+        }
+        catch (const std::out_of_range &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "activity tracker rejects out-of-range vertex");
+
+        threw = false;
+
+        try
+        {
+            (void)activity.is_active(3);
+        }
+        catch (const std::out_of_range &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "activity tracker rejects out-of-range query");
+
+        threw = false;
+
+        try
+        {
+            const std::vector<ActivityTracker::VertexRange> partitions = {
+                {2, 1}};
+
+            (void)activity.partition_statistics(graph, partitions);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "activity tracker rejects reversed partition range");
+
+        threw = false;
+
+        try
+        {
+            const std::vector<ActivityTracker::VertexRange> partitions = {
+                {0, 4}};
+
+            (void)activity.partition_statistics(graph, partitions);
+        }
+        catch (const std::out_of_range &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "activity tracker rejects partition range beyond graph");
+
+        threw = false;
+
+        try
+        {
+            CSRGraph different_graph(
+                2,
+                {0, 1, 1},
+                {1});
+
+            (void)activity.active_edge_count(different_graph);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "activity tracker rejects mismatched graph");
+    }
+
 } // namespace
 
 int main()
@@ -218,7 +609,15 @@ int main()
         test_sssp_rejects_negative_weights();
         test_sssp_rejects_invalid_source();
 
-        std::cout << "Phase 2 CPU algorithm tests passed.\n";
+        test_activity_tracker_basic();
+        test_activity_tracker_duplicate_activation();
+        test_activity_tracker_set_active_vertices();
+        test_activity_tracker_clear();
+        test_activity_tracker_partition_statistics();
+        test_activity_tracker_empty_partition();
+        test_activity_tracker_invalid_inputs();
+
+        std::cout << "Phase 2 and Phase 3 CPU tests passed.\n";
         return 0;
     }
     catch (const std::exception &error)

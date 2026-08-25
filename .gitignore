@@ -1,0 +1,9 @@
+build/
+__pycache__/
+*.pyc
+*.pyo
+results/*.json
+results/*.jsonl
+.vscode/
+.idea/
+HyTGraph_Master_Implementation_Plan_FINAL.md

@@ -1,0 +1,5 @@
+experiment_id: phase0-dummy
+algorithm: pagerank
+output_format: json
+metadata:
+  purpose: infrastructure-smoke-test

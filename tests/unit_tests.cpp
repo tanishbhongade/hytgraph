@@ -12,6 +12,7 @@
 #include "graph/graph_loader.hpp"
 
 #include "graph/partition.hpp"
+#include "transfer/filter_engine.hpp"
 
 namespace
 {
@@ -785,6 +786,247 @@ namespace
             next_edge == graph.num_edges(),
             "partitions cover every graph edge");
     }
+
+    void test_exp_tm_filter_skips_inactive_partitions()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMFilter;
+
+        // Graph:
+        //
+        // 0 -> 1, 2
+        // 1 -> 2
+        // 2 -> 0
+        // 3 -> 0
+        //
+        // Five total edges. Use a small partition target so that
+        // the graph is divided into multiple logical partitions.
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 5},
+            {1, 2, 2, 0, 0});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+
+        // Only vertex 0 is active. Its two outgoing edges therefore
+        // make the partition containing vertex 0 active.
+        activity.set_active(0);
+
+        ExpTMFilter filter(true);
+
+        const auto plan =
+            filter.plan(graph, partitions, activity);
+
+        expect(plan.partitions.size() == partitions.size(),
+               "filter plan contains every logical partition");
+
+        expect(plan.active_partition_count() >= 1U,
+               "active vertex produces an active partition");
+
+        expect(plan.transferred_partition_count() ==
+                   plan.active_partition_count(),
+               "filter transfers exactly the active partitions");
+
+        expect(plan.transferred_edge_count() > 0U,
+               "filter transfers edges from active partitions");
+
+        expect(plan.transferred_edge_count() < graph.num_edges(),
+               "filter skips at least one inactive partition");
+
+        std::size_t expected_transferred_bytes = 0U;
+        CSRGraph::offset_type expected_transferred_edges = 0U;
+
+        for (std::size_t i = 0U; i < partitions.size(); ++i)
+        {
+            if (!plan.partitions[i].transferred)
+            {
+                continue;
+            }
+
+            expected_transferred_edges +=
+                partitions[i].edge_count();
+
+            expected_transferred_bytes +=
+                partitions[i].edge_data_bytes();
+        }
+
+        expect(
+            plan.transferred_edge_count() ==
+                expected_transferred_edges,
+            "reported transferred edge count matches selected partitions");
+
+        expect(
+            plan.transferred_byte_count() ==
+                expected_transferred_bytes,
+            "reported transferred byte count matches selected partitions");
+
+        for (std::size_t i = 0U; i < partitions.size(); ++i)
+        {
+            const auto &decision = plan.partitions[i];
+
+            expect(
+                decision.total_edges == partitions[i].edge_count(),
+                "filter decision records partition edge count");
+
+            if (decision.active)
+            {
+                expect(
+                    decision.transferred_edges ==
+                        partitions[i].edge_count(),
+                    "active partition is transferred in full");
+
+                expect(
+                    decision.transferred_bytes ==
+                        partitions[i].edge_data_bytes(),
+                    "active partition transfers complete edge payload");
+            }
+            else
+            {
+                expect(
+                    decision.transferred_edges == 0U,
+                    "inactive partition transfers no edges");
+
+                expect(
+                    decision.transferred_bytes == 0U,
+                    "inactive partition transfers no bytes");
+            }
+        }
+    }
+
+    void test_exp_tm_filter_full_partition_transfer()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMFilter;
+
+        // The first partition contains two edges. Activate only one
+        // vertex in that partition. ExpTM-Filter must still transfer
+        // both edges because it does not compact the partition.
+
+        CSRGraph graph(
+            3,
+            {0, 2, 2, 2},
+            {1, 2});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(!partitions.empty(),
+               "full-transfer test creates logical partitions");
+
+        ActivityTracker activity(graph.num_vertices());
+        activity.set_active(0);
+
+        ExpTMFilter filter(true);
+
+        const auto plan =
+            filter.plan(graph, partitions, activity);
+
+        expect(plan.active_partition_count() == 1U,
+               "only partition containing active edges is active");
+
+        expect(plan.transferred_partition_count() == 1U,
+               "exactly one partition is transferred");
+
+        expect(plan.transferred_edge_count() ==
+                   partitions.front().edge_count(),
+               "filter transfers entire active partition");
+
+        expect(plan.transferred_edge_count() == 2U,
+               "filter does not compact active edges");
+    }
+
+    void test_exp_tm_filter_disabled_reference_path()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMFilter;
+
+        CSRGraph graph(
+            4,
+            {0, 1, 2, 3, 4},
+            {1, 2, 3, 0});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+
+        // No active vertices.
+        expect(activity.active_vertex_count() == 0U,
+               "reference-path test starts with no active vertices");
+
+        ExpTMFilter filter(false);
+
+        const auto plan =
+            filter.plan(graph, partitions, activity);
+
+        expect(plan.active_partition_count() == 0U,
+               "no partitions are active");
+
+        expect(plan.transferred_partition_count() ==
+                   partitions.size(),
+               "disabled filter transfers every partition");
+
+        expect(plan.transferred_edge_count() ==
+                   graph.num_edges(),
+               "disabled filter transfers all graph edges");
+
+        expect(plan.transferred_byte_count() ==
+                   graph.num_edges() *
+                       sizeof(CSRGraph::vertex_id),
+               "disabled filter transfers complete edge payload");
+    }
+
+    void test_exp_tm_filter_rejects_mismatched_activity()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMFilter;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 2},
+            {1, 2});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(2);
+
+        ExpTMFilter filter(true);
+
+        bool threw = false;
+
+        try
+        {
+            (void)filter.plan(graph, partitions, activity);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "filter rejects activity tracker with wrong vertex count");
+    }
 } // namespace
 
 int main()
@@ -808,6 +1050,11 @@ int main()
         test_logical_partition_edge_boundaries();
         test_logical_partition_full_vertex_coverage();
         test_logical_partition_full_edge_coverage();
+
+        test_exp_tm_filter_skips_inactive_partitions();
+        test_exp_tm_filter_full_partition_transfer();
+        test_exp_tm_filter_disabled_reference_path();
+        test_exp_tm_filter_rejects_mismatched_activity();
 
         std::cout << "All Phase 0 unit tests passed.\n";
         return 0;

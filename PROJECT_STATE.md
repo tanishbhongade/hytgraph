@@ -2,29 +2,21 @@
 
 ## Current Phase
 
-Phase 4 — Logical Partitioning
+Phase 6 — ExpTM-Compaction
 
 ## Current Milestone
 
-M5 — Partitioning
+M7 — ExpTM-Compaction
 
 ## Current Task
 
-Implement logical graph partitioning for fine-grained partition-level analysis.
-
-## Status
-
-Phase 4 logical partitioning implementation is complete.
-
-The implementation has been added, integrated into the CMake build, and tested locally by the project owner.
-
-The local build completed successfully and the CTest suite passed.
+Implement ExpTM-Compaction after completing the Phase 5 ExpTM-Filter baseline.
 
 ---
 
-## Implemented Phases
+# Completed Phases
 
-### Phase 0 — Project Infrastructure
+## Phase 0 — Project Infrastructure
 
 Implemented:
 
@@ -35,7 +27,9 @@ Implemented:
 - Configuration infrastructure
 - Logging/result infrastructure
 
-### Phase 1 — CSR Graph Infrastructure
+---
+
+## Phase 1 — CSR Graph Infrastructure
 
 Implemented:
 
@@ -44,25 +38,39 @@ Implemented:
 - Graph loading
 - Graph-related unit tests
 
-### Phase 2 — Reference Algorithms
+---
+
+## Phase 2 — Reference Algorithms
 
 Implemented:
 
-- CPU reference algorithms
-- GPU algorithm infrastructure
-- PageRank
-- SSSP
+- CPU PageRank
+- CPU SSSP
+- GPU baseline PageRank
+- GPU baseline SSSP
+- CPU/GPU correctness tests
 
-### Phase 3 — Activity Tracking
+The GPU implementation established in Phase 2 is the baseline GPU infrastructure.
+
+HyTGraph-specific GPU transfer/execution mechanisms are introduced only in the phases where they are required.
+
+---
+
+## Phase 3 — Activity Tracking
 
 Implemented:
 
 - Reusable CPU ActivityTracker
-- Active/inactive edge tracking
-- Partition-statistics interface using vertex ranges
+- Active-vertex tracking
+- Active-edge counting
+- Partition statistics
 - Integration with SSSP
 
-### Phase 4 — Logical Partitioning
+Activity tracking remains independent of logical partitioning.
+
+---
+
+## Phase 4 — Logical Partitioning
 
 Implemented:
 
@@ -77,9 +85,7 @@ Implemented:
 - Partition validation
 - Unit tests for partition correctness
 
----
-
-## Phase 4 Implementation
+### Partitioning Behavior
 
 Logical partitions are represented as metadata over the existing CSR graph.
 
@@ -87,7 +93,7 @@ A partition contains:
 
 - `[vertex_begin, vertex_end)`
 - `[edge_begin, edge_end)`
-- configured target partition size
+- configured target size
 
 The partitioner walks CSR vertex rows and accumulates the corresponding edge storage.
 
@@ -95,29 +101,11 @@ A partition boundary is created before a vertex when adding that vertex would ca
 
 CSR rows are never split.
 
-Therefore the configured partition size is a target rather than an exact size.
+The configured partition size is therefore a target rather than an exact size.
 
-A vertex with an adjacency list larger than the target may produce an oversized partition.
+A vertex with an adjacency list larger than the configured target may produce an oversized partition.
 
----
-
-## Phase 4 Configuration
-
-Default logical partition size:
-
-    32 MiB
-
-Equivalent byte value:
-
-    32 * 1024 * 1024
-
-The partitioner also accepts a custom byte target through its constructor.
-
----
-
-## Phase 4 Correctness Invariants
-
-The implementation verifies/assumes the following invariants:
+### Phase 4 Correctness Invariants
 
 - First partition begins at vertex 0.
 - Last partition ends at `num_vertices`.
@@ -132,9 +120,7 @@ The implementation verifies/assumes the following invariants:
 - Oversized adjacency lists remain intact.
 - Zero partition size is rejected.
 
----
-
-## Files Added/Modified for Phase 4
+### Phase 4 Files
 
 Added:
 
@@ -148,35 +134,137 @@ Modified:
 
 ---
 
-## Tests
+# Phase 5 — ExpTM-Filter
 
-Phase 4 tests cover:
+## Status
 
-- Basic logical partitioning
-- Default partition size
-- Custom partition size
-- Empty graph
-- Zero-degree vertices
-- Oversized vertex adjacency lists
-- Invalid partition size
-- Partition vertex-boundary correctness
-- Partition edge-boundary correctness
-- Full vertex coverage
-- Full edge coverage
+**COMPLETE — reference/filter-planning baseline**
 
-The project owner reported that the local build and complete CTest suite passed after the Phase 4 changes.
+Phase 5 has been completed at the reference/filter-planning level.
 
-No benchmark measurements have been collected.
+The implementation provides the required logical-partition filtering behavior and transfer-volume accounting.
+
+Actual HyTGraph-specific CUDA host-to-device transfer execution is intentionally not part of this completed reference layer.
 
 ---
 
-## Paper Features
+## Phase 5 Implementation
+
+Implemented:
+
+- Reference CPU ExpTM-Filter
+- Integration with existing LogicalPartition
+- Integration with existing ActivityTracker statistics
+- Active-partition selection
+- Inactive-partition skipping
+- Whole-logical-partition transfer semantics
+- Disabled-filter/reference path
+- Per-partition transfer-selection state
+- Transferred partition count
+- Transferred edge count
+- Transferred byte count
+- ActivityTracker/graph vertex-count validation
+- Partition range/coverage validation
+
+### ExpTM-Filter Semantics
+
+For a partition containing active edges:
+
+    active_edges > 0
+            ↓
+    partition selected
+            ↓
+    complete logical partition transferred
+
+Active edges are not compacted by ExpTM-Filter.
+
+For example:
+
+    active_edges = 1
+    partition_edges = 100
+
+results in:
+
+    transferred_edges = 100
+
+For a partition with no active edges:
+
+    active_edges = 0
+            ↓
+    partition skipped
+
+The disabled-filter/reference path selects all logical partitions.
+
+---
+
+## Phase 5 Measurements
+
+The filter plan records:
+
+- active partition count
+- transferred partition count
+- transferred edge count
+- transferred byte count
+
+Transferred-byte accounting is based on the logical partition edge payload exposed by the partition abstraction.
+
+These values are logical/reference transfer measurements.
+
+They are not measurements of physical PCIe/H2D traffic.
+
+No artificial GPU timing was introduced into the filter-planning layer.
+
+---
+
+## Phase 5 Tests
+
+Tests cover:
+
+- Active/inactive partition filtering
+- Whole-partition transfer semantics
+- Disabled-filter/reference behavior
+- Activity/graph size mismatch
+- Transferred-edge accounting
+- Transferred-byte accounting
+
+The project owner reported that the complete local CTest suite passed after the Phase 5 changes.
+
+Reported result:
+
+    100% tests passed, 0 tests failed out of 4
+
+Tests reported as passing:
+
+- `unit_tests`
+- `algorithm_tests`
+- `cuda_algorithm_tests`
+- `experiment_runner_smoke`
+
+These tests were executed by the project owner, not by the assistant.
+
+---
+
+## Phase 5 Files
+
+Added:
+
+- `include/transfer/filter_engine.hpp`
+- `src/transfer/filter_engine.cpp`
+
+Modified:
+
+- `CMakeLists.txt`
+- `tests/unit_tests.cpp`
+
+---
+
+# Paper Features
 
 - [x] CSR
 - [x] Logical partitioning
 - [ ] SEP-Graph / equivalent GPU kernel
 - [ ] Neighbor shifting
-- [ ] ExpTM-Filter
+- [x] ExpTM-Filter
 - [ ] ExpTM-Compaction
 - [ ] ImpTM-Zero-Copy
 - [ ] HyTM
@@ -189,7 +277,7 @@ No benchmark measurements have been collected.
 
 ---
 
-## Algorithms
+# Algorithms
 
 - [x] PageRank
 - [x] SSSP
@@ -198,108 +286,189 @@ No benchmark measurements have been collected.
 
 ---
 
-## Datasets
+# Datasets
 
 No benchmark dataset has been integrated yet.
 
----
-
-## Paper Fidelity
-
-The following aspects directly follow the supplied HyTGraph paper/master plan:
-
-- Logical partitioning is used for fine-grained graph analysis.
-- Logical partitions use a 32 MB target.
-- Logical partitioning is distinct from later execution-task granularity.
-- Partition size is configurable in the reproduction project.
+No benchmark measurements have been collected.
 
 ---
 
-## Engineering Approximations
+# Paper Fidelity
+
+## ExpTM-Filter
+
+The Phase 5 reference implementation follows the documented whole-partition filtering behavior:
+
+- Logical partitions are the filtering granularity.
+- Partitions containing active edges are selected.
+- Partitions containing no active edges are skipped.
+- Selected partitions are represented as complete logical-partition transfers.
+- Active-edge compaction is not performed by ExpTM-Filter.
+
+The implementation does not claim to reproduce undocumented internal details of the original HyTGraph runtime.
+
+## Logical Partitioning
+
+The reproduction uses logical partitions as a fine-grained graph-analysis abstraction.
+
+The partition target is configured with a 32 MiB default.
+
+Partition boundaries preserve CSR adjacency-list boundaries.
+
+---
+
+# Engineering Approximations
+
+## Logical Partitioning
 
 The supplied paper material does not provide sufficient implementation detail to reconstruct the exact original partition-boundary construction algorithm.
 
 The reproduction therefore uses:
 
 - CSR vertex-row boundaries.
-- Approximate target-size balancing based on CSR destination storage.
+- Target-size balancing based on CSR destination storage.
 - No splitting of individual CSR adjacency rows.
 - Metadata-only logical partitions referencing the existing CSR graph.
 
-These choices are engineering approximations and should not be interpreted as confirmed details of the original HyTGraph implementation.
+These are engineering approximations and should not be interpreted as confirmed implementation details of the original HyTGraph system.
 
-The paper's 32 MB terminology is represented as 32 MiB / 33,554,432 bytes in the implementation.
+The 32 MB terminology is represented as 32 MiB / 33,554,432 bytes in the implementation.
+
+## ExpTM-Filter
+
+The current implementation separates:
+
+1. deciding which logical partitions should be transferred, and
+2. physically executing those transfers on the GPU.
+
+The Phase 5 implementation completes the first part.
+
+`transferred_bytes` represents the logical partition payload exposed by the partition abstraction.
+
+It should not be interpreted as a measurement of physical PCIe/H2D traffic.
+
+Actual CUDA transfer execution is deferred to the phase where the transfer mechanism is explicitly integrated.
 
 ---
 
-## Dependencies
+# Dependencies
 
-Phase 4 does not yet integrate:
+Phase 5 uses:
+
+- CSRGraph
+- LogicalPartition
+- LogicalPartitioner
+- ActivityTracker
+
+Phase 5 does not yet integrate:
 
 - SEP-Graph
 - Subway
 - CUB
 - CUDA streams
 - Neighbor shifting
-- ExpTM-Filter
 - ExpTM-Compaction
+- ImpTM-Zero-Copy
 - VCGC
 - HyTM
 
-These belong to later phases.
-
-ActivityTracker already provides partition-statistics functionality over vertex ranges and therefore remains compatible with the logical partition representation.
+The existing GPU baseline infrastructure from Phase 2 remains intact.
 
 ---
 
-## Known Issues
+# Known Issues
 
-1. The exact partition-boundary construction algorithm used by the original HyTGraph implementation is not specified sufficiently in the supplied paper material.
+1. The exact original logical partition-boundary construction algorithm is not sufficiently specified in the supplied paper material.
 
-2. Logical partitions currently exist as a graph-analysis abstraction. They are not yet connected to the later transfer engine, task scheduler, or HyTM cost model.
+2. Logical partitions currently remain a graph-analysis abstraction and are not yet connected to the later task scheduler or HyTM cost model.
 
-3. The implementation currently accounts for CSR destination-array bytes when evaluating the partition target. It does not treat every graph/runtime metadata structure as part of the partition byte target.
+3. The partition target currently accounts for the CSR destination storage represented by the partition abstraction rather than every possible runtime metadata structure.
 
-4. No GPU execution or performance measurement has been performed for Phase 4.
+4. ExpTM-Filter currently produces a reference transfer plan rather than executing actual HyTGraph-specific CUDA host-to-device transfers.
+
+5. Transfer-byte measurements represent logical partition payload rather than physical measured H2D traffic.
+
+6. No benchmark measurements have yet been collected.
+
+These are known limitations and do not block completion of the Phase 5 reference/filter baseline.
 
 ---
 
-## Validation Status
+# Validation Status
 
-The project owner reported:
+The project owner reported the following local commands completed successfully:
+
+    cmake -S . -B build -DHYTGRAPH_BUILD_TESTS=ON
 
     cmake --build build -j
 
-completed successfully.
-
-The project owner also reported:
-
     ctest --test-dir build --output-on-failure
 
-completed successfully with all tests passing.
+Reported CTest result:
 
-These results were not executed by the assistant and are recorded as user-provided validation.
+    100% tests passed, 0 tests failed out of 4
+
+Total reported test time:
+
+    1.79 sec
+
+The reported CUDA algorithm tests executed successfully in the owner's local CUDA environment.
+
+These results are recorded from user-provided output.
+
+The assistant did not execute the build, tests, CUDA kernels, or benchmarks.
 
 ---
 
-## Current Repository State
+# Repository State
 
-Phase 4 logical partitioning is implemented and integrated into the build.
+Phase 5 ExpTM-Filter is complete at the reference/filter-planning level.
 
-No known blocking compile, link, or test issue remains for Phase 4 based on the reported local validation.
+The core filter behavior has been implemented and locally validated.
+
+No known blocking compile, link, or test issue remains based on the reported local validation.
+
+Actual HyTGraph-specific CUDA transfer execution remains for the appropriate later execution/integration phase.
 
 ---
 
-## Next Task
+# Current Boundary
 
-Phase 5 — ExpTM-Filter
+The project should now move from:
 
-Before implementing Phase 5:
+    Phase 5 — ExpTM-Filter
 
-1. Inspect the current transfer/runtime architecture.
-2. Locate the ExpTM-Filter mechanism in the paper.
-3. Determine how logical partitions connect to transfer decisions.
-4. Identify the existing transfer abstraction, if any.
-5. Implement only the ExpTM-Filter portion required by the master plan.
-6. Preserve a correctness/reference path.
-7. Add tests before moving to later ExpTM phases.
+to:
+
+    Phase 6 — ExpTM-Compaction
+
+Phase 6 should not be implemented prematurely as part of the Phase 5 filter.
+
+ExpTM-Filter and ExpTM-Compaction remain separate mechanisms:
+
+    ExpTM-Filter
+        ↓
+    select complete active logical partitions
+
+    ExpTM-Compaction
+        ↓
+    compact active data within the selected transfer/execution scope
+
+---
+
+# Next Task
+
+Phase 6 — ExpTM-Compaction.
+
+Before coding Phase 6:
+
+1. Inspect the Phase 6 requirements in `MASTER_PLAN.md`.
+2. Locate the corresponding mechanism in the supplied HyTGraph paper.
+3. Inspect the existing Phase 5 filter interfaces.
+4. Determine how compaction should consume the filter/reference path.
+5. Identify the role of Subway/CUB if required by the paper and master plan.
+6. Preserve the Phase 5 correctness/reference path.
+7. Implement only Phase 6.
+8. Add/update tests.
+9. Do not introduce later-phase mechanisms such as HyTM, VCGC, or multi-stream execution unless explicitly required by Phase 6.

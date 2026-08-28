@@ -1,165 +1,305 @@
-# HyTGraph Project State
+# HyTGraph Reproduction — Project State
 
-## Current phase
+## Current Phase
 
-**CURRENT PHASE:** Phase 3 — Activity tracking
+Phase 4 — Logical Partitioning
 
-**CURRENT MILESTONE:** M3 — Activity tracking reference
+## Current Milestone
 
-**CURRENT TASK:** Implement Phase 3 — Activity tracking
+M5 — Partitioning
 
-**STATUS:** Complete — reusable CPU activity tracking implemented and locally verified.
+## Current Task
 
----
+Implement logical graph partitioning for fine-grained partition-level analysis.
 
-## Implemented
+## Status
 
-### Phase 0 — Project infrastructure
+Phase 4 logical partitioning implementation is complete.
 
-- CMake/C++17 project structure.
-- CUDA target fallback for environments without CUDA.
-- C++ runtime library containing configuration, logging, and result serialization.
-- `hytgraph_dummy` executable.
-- CTest unit-test infrastructure.
-- Python experiment-runner skeleton using YAML configuration and JSON results.
-- Versioned result schema.
-- Dummy experiment configuration.
-- README/build/test/run infrastructure.
+The implementation has been added, integrated into the CMake build, and tested locally by the project owner.
 
-### Phase 1 — CSR graph infrastructure
-
-- CSR graph storage.
-- 64-bit CSR row offsets.
-- 32-bit destination vertex IDs.
-- Optional `float` edge weights.
-- CSR invariant validation.
-- Vertex degree queries.
-- Neighbor range queries.
-- Individual neighbor queries.
-- Individual edge-weight queries.
-- Directed edge-list graph loader.
-- Weighted and unweighted graph loading.
-- Comment and blank-line handling.
-- Parallel-edge preservation.
-- Malformed-input validation.
-- CSR unit tests.
-- Graph-loader unit tests.
-- CMake integration of graph sources.
-
-### Phase 2 — Correctness reference algorithms
-
-#### CPU
-
-- CPU PageRank correctness/reference implementation.
-- CPU SSSP correctness/reference implementation.
-- Configurable PageRank damping factor, convergence tolerance, and maximum iterations.
-- Synchronous PageRank computation.
-- CPU PageRank dangling-vertex mass redistribution.
-- Synchronous active-frontier SSSP.
-- Weighted SSSP.
-- Unweighted SSSP using unit edge weights.
-- Validation of SSSP source and edge weights.
-
-#### CUDA
-
-- GPU PageRank baseline implementation.
-- GPU SSSP baseline implementation.
-- CUDA-unavailable stub implementations.
-- CPU/GPU correctness comparison tests.
-- Explicit device memory management.
-- Single-stream/synchronous baseline execution.
-- GPU-side PageRank and SSSP iterative kernels.
-
-#### Build/test integration
-
-- `hytgraph_algorithms` library.
-- CPU algorithm test target.
-- Conditional CUDA algorithm test target.
-- CUDA test registration only when CUDA is actually enabled and available.
-- Existing Phase 0/Phase 1 interfaces preserved.
-
-### Phase 3 — Activity tracking
-
-- Reusable `ActivityTracker` subsystem.
-- Active-vertex representation using a byte-per-vertex activity state.
-- Explicit active-vertex count.
-- Individual vertex activation/deactivation.
-- Replacement of the complete active-vertex set.
-- Deterministic active-vertex enumeration.
-- Active-edge calculation from active source vertices and CSR out-degrees.
-- Partition activity statistics over externally supplied vertex ranges.
-- Per-partition active-vertex count.
-- Per-partition active-edge count.
-- Per-partition total-edge count.
-- Active-vertex and active-edge presence checks.
-- Activity-state validation.
-- Graph/activity vertex-count validation.
-- Partition-range validation.
-- SSSP migrated from its private activity vectors to the reusable `ActivityTracker`.
-- Existing SSSP public interface preserved.
+The local build completed successfully and the CTest suite passed.
 
 ---
 
-## Files changed for Phase 3
+## Implemented Phases
 
-### Created
+### Phase 0 — Project Infrastructure
 
-- `include/graph/activity_tracker.hpp`
-- `src/graph/activity_tracker.cpp`
+Implemented:
 
-### Modified
+- CMake project structure
+- Runtime library
+- Test infrastructure
+- CUDA build target
+- Configuration infrastructure
+- Logging/result infrastructure
+
+### Phase 1 — CSR Graph Infrastructure
+
+Implemented:
+
+- CSR graph representation
+- CSR validation
+- Graph loading
+- Graph-related unit tests
+
+### Phase 2 — Reference Algorithms
+
+Implemented:
+
+- CPU reference algorithms
+- GPU algorithm infrastructure
+- PageRank
+- SSSP
+
+### Phase 3 — Activity Tracking
+
+Implemented:
+
+- Reusable CPU ActivityTracker
+- Active/inactive edge tracking
+- Partition-statistics interface using vertex ranges
+- Integration with SSSP
+
+### Phase 4 — Logical Partitioning
+
+Implemented:
+
+- LogicalPartition
+- LogicalPartitioner
+- Configurable logical partition target size
+- Default 32 MiB logical partition target
+- CSR-row-aligned partition boundaries
+- Partition vertex ranges
+- Partition edge ranges
+- Partition edge-byte accounting
+- Partition validation
+- Unit tests for partition correctness
+
+---
+
+## Phase 4 Implementation
+
+Logical partitions are represented as metadata over the existing CSR graph.
+
+A partition contains:
+
+- `[vertex_begin, vertex_end)`
+- `[edge_begin, edge_end)`
+- configured target partition size
+
+The partitioner walks CSR vertex rows and accumulates the corresponding edge storage.
+
+A partition boundary is created before a vertex when adding that vertex would cause the current non-empty partition to exceed the configured target size.
+
+CSR rows are never split.
+
+Therefore the configured partition size is a target rather than an exact size.
+
+A vertex with an adjacency list larger than the target may produce an oversized partition.
+
+---
+
+## Phase 4 Configuration
+
+Default logical partition size:
+
+    32 MiB
+
+Equivalent byte value:
+
+    32 * 1024 * 1024
+
+The partitioner also accepts a custom byte target through its constructor.
+
+---
+
+## Phase 4 Correctness Invariants
+
+The implementation verifies/assumes the following invariants:
+
+- First partition begins at vertex 0.
+- Last partition ends at `num_vertices`.
+- Partitions have contiguous vertex ranges.
+- Partitions have contiguous edge ranges.
+- No vertex is assigned to more than one partition.
+- No edge range is skipped between partitions.
+- Sum of partition edge counts equals graph edge count.
+- CSR row boundaries are preserved.
+- Empty graphs produce no partitions.
+- Zero-degree vertices are supported.
+- Oversized adjacency lists remain intact.
+- Zero partition size is rejected.
+
+---
+
+## Files Added/Modified for Phase 4
+
+Added:
+
+- `include/graph/partition.hpp`
+- `src/graph/partition.cpp`
+
+Modified:
 
 - `CMakeLists.txt`
-- `src/algorithms/sssp.cpp`
-- `tests/algorithm_tests.cpp`
-- `PROJECT_STATE.md`
+- `tests/unit_tests.cpp`
 
 ---
 
-## Public interfaces
+## Tests
 
-Phase 0 and Phase 1 public interfaces remain unchanged.
+Phase 4 tests cover:
 
-Phase 2 public interfaces remain unchanged:
+- Basic logical partitioning
+- Default partition size
+- Custom partition size
+- Empty graph
+- Zero-degree vertices
+- Oversized vertex adjacency lists
+- Invalid partition size
+- Partition vertex-boundary correctness
+- Partition edge-boundary correctness
+- Full vertex coverage
+- Full edge coverage
 
-- `hytgraph::algorithms::PageRankOptions`
-- `hytgraph::algorithms::PageRankResult`
-- `hytgraph::algorithms::pagerank_cpu`
-- `hytgraph::algorithms::pagerank_gpu`
-- `hytgraph::algorithms::SSSPOptions`
-- `hytgraph::algorithms::SSSPResult`
-- `hytgraph::algorithms::sssp_cpu`
-- `hytgraph::algorithms::sssp_gpu`
+The project owner reported that the local build and complete CTest suite passed after the Phase 4 changes.
 
-Phase 3 adds:
-
-- `hytgraph::graph::ActivityTracker`
-- `hytgraph::graph::ActivityTracker::VertexRange`
-- `hytgraph::graph::ActivityTracker::PartitionActivity`
-
-The SSSP public API was not changed.
+No benchmark measurements have been collected.
 
 ---
 
-## Activity semantics
+## Paper Features
 
-The Phase 3 activity tracker follows the paper's active-subgraph semantics:
-
-- Active vertices represent vertices participating in the current active frontier.
-- Outgoing edges of active vertices constitute the active-edge set.
-- Active-edge volume is therefore computed as the sum of `Do(v)` over active vertices.
-- Partition activity statistics are computed independently for supplied vertex ranges.
-
-The paper does not specify the exact C++ representation or API of the activity tracker. The reusable C++ interface and byte-per-vertex representation are therefore implementation choices.
+- [x] CSR
+- [x] Logical partitioning
+- [ ] SEP-Graph / equivalent GPU kernel
+- [ ] Neighbor shifting
+- [ ] ExpTM-Filter
+- [ ] ExpTM-Compaction
+- [ ] ImpTM-Zero-Copy
+- [ ] HyTM
+- [ ] Task Combining
+- [ ] Hub Sorting
+- [ ] Contribution-Driven Scheduling
+- [ ] VCGC
+- [ ] Cache Refresh
+- [ ] Multi-stream execution
 
 ---
 
-## SSSP activity integration
+## Algorithms
 
-SSSP previously maintained its activity state internally.
+- [x] PageRank
+- [x] SSSP
+- [ ] BFS
+- [ ] Connected Components
 
-Phase 3 replaces that private representation with:
+---
 
-```text
-ActivityTracker
-```
+## Datasets
+
+No benchmark dataset has been integrated yet.
+
+---
+
+## Paper Fidelity
+
+The following aspects directly follow the supplied HyTGraph paper/master plan:
+
+- Logical partitioning is used for fine-grained graph analysis.
+- Logical partitions use a 32 MB target.
+- Logical partitioning is distinct from later execution-task granularity.
+- Partition size is configurable in the reproduction project.
+
+---
+
+## Engineering Approximations
+
+The supplied paper material does not provide sufficient implementation detail to reconstruct the exact original partition-boundary construction algorithm.
+
+The reproduction therefore uses:
+
+- CSR vertex-row boundaries.
+- Approximate target-size balancing based on CSR destination storage.
+- No splitting of individual CSR adjacency rows.
+- Metadata-only logical partitions referencing the existing CSR graph.
+
+These choices are engineering approximations and should not be interpreted as confirmed details of the original HyTGraph implementation.
+
+The paper's 32 MB terminology is represented as 32 MiB / 33,554,432 bytes in the implementation.
+
+---
+
+## Dependencies
+
+Phase 4 does not yet integrate:
+
+- SEP-Graph
+- Subway
+- CUB
+- CUDA streams
+- Neighbor shifting
+- ExpTM-Filter
+- ExpTM-Compaction
+- VCGC
+- HyTM
+
+These belong to later phases.
+
+ActivityTracker already provides partition-statistics functionality over vertex ranges and therefore remains compatible with the logical partition representation.
+
+---
+
+## Known Issues
+
+1. The exact partition-boundary construction algorithm used by the original HyTGraph implementation is not specified sufficiently in the supplied paper material.
+
+2. Logical partitions currently exist as a graph-analysis abstraction. They are not yet connected to the later transfer engine, task scheduler, or HyTM cost model.
+
+3. The implementation currently accounts for CSR destination-array bytes when evaluating the partition target. It does not treat every graph/runtime metadata structure as part of the partition byte target.
+
+4. No GPU execution or performance measurement has been performed for Phase 4.
+
+---
+
+## Validation Status
+
+The project owner reported:
+
+    cmake --build build -j
+
+completed successfully.
+
+The project owner also reported:
+
+    ctest --test-dir build --output-on-failure
+
+completed successfully with all tests passing.
+
+These results were not executed by the assistant and are recorded as user-provided validation.
+
+---
+
+## Current Repository State
+
+Phase 4 logical partitioning is implemented and integrated into the build.
+
+No known blocking compile, link, or test issue remains for Phase 4 based on the reported local validation.
+
+---
+
+## Next Task
+
+Phase 5 — ExpTM-Filter
+
+Before implementing Phase 5:
+
+1. Inspect the current transfer/runtime architecture.
+2. Locate the ExpTM-Filter mechanism in the paper.
+3. Determine how logical partitions connect to transfer decisions.
+4. Identify the existing transfer abstraction, if any.
+5. Implement only the ExpTM-Filter portion required by the master plan.
+6. Preserve a correctness/reference path.
+7. Add tests before moving to later ExpTM phases.

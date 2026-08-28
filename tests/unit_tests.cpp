@@ -14,6 +14,8 @@
 #include "graph/partition.hpp"
 #include "transfer/filter_engine.hpp"
 
+#include "transfer/compaction_engine.hpp"
+
 namespace
 {
 
@@ -1027,6 +1029,535 @@ namespace
         expect(threw,
                "filter rejects activity tracker with wrong vertex count");
     }
+
+    void test_exp_tm_compaction_basic()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMCompaction;
+
+        // Graph:
+        //
+        // 0 -> 1, 2
+        // 1 -> 2
+        // 2 -> 0
+        // 3 -> 0
+        //
+        // CSR:
+        // row_offsets    = [0, 2, 3, 4, 5]
+        // column_indices = [1, 2, 2, 0, 0]
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 5},
+            {1, 2, 2, 0, 0});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+
+        // Only vertex 0 is active.
+        activity.set_active(0);
+
+        ExpTMCompaction compaction(true);
+
+        const auto result =
+            compaction.compact(graph, partitions, activity);
+
+        expect(compaction.enabled(),
+               "ExpTM-Compaction is enabled");
+
+        expect(
+            result.compacted_partition_count() == 1U,
+            "only partition containing the active vertex is compacted");
+
+        expect(
+            result.active_vertex_count() == 1U,
+            "one active source vertex is represented");
+
+        expect(
+            result.active_edge_count() == 2U,
+            "active source contributes exactly two edges");
+
+        expect(
+            result.neighbor_bytes() ==
+                2U * sizeof(CSRGraph::vertex_id),
+            "neighbor payload contains two destination IDs");
+
+        expect(
+            result.index_bytes() ==
+                2U * sizeof(CSRGraph::offset_type),
+            "compressed index contains one range per active vertex plus terminal offset");
+
+        expect(
+            result.total_bytes() ==
+                result.neighbor_bytes() + result.index_bytes(),
+            "total compacted bytes equal neighbor plus index bytes");
+
+        const auto &partition = result.partitions.front();
+
+        expect(
+            partition.partition_index == 0U,
+            "compacted partition retains source partition index");
+
+        expect(
+            partition.vertex_begin == partitions.front().vertex_begin(),
+            "compacted partition retains vertex-begin boundary");
+
+        expect(
+            partition.vertex_end == partitions.front().vertex_end(),
+            "compacted partition retains vertex-end boundary");
+
+        expect(
+            partition.active_vertices.size() == 1U,
+            "one active vertex is retained");
+
+        expect(
+            partition.active_vertices.front() == 0U,
+            "active vertex ID is preserved");
+
+        expect(
+            partition.neighbors.size() == 2U,
+            "two neighbors are compacted");
+
+        expect(
+            partition.neighbors[0] == 1U,
+            "first compacted neighbor is preserved");
+
+        expect(
+            partition.neighbors[1] == 2U,
+            "second compacted neighbor is preserved");
+
+        expect(
+            partition.neighbor_index.size() == 2U,
+            "compressed index has active vertex plus terminal entry");
+
+        expect(
+            partition.neighbor_index[0] == 0U,
+            "compressed index starts at zero");
+
+        expect(
+            partition.neighbor_index[1] == 2U,
+            "terminal compressed offset equals compacted edge count");
+
+        expect(
+            partition.active_edge_count() == 2U,
+            "partition active edge count is correct");
+
+        expect(
+            partition.active_vertex_count() == 1U,
+            "partition active vertex count is correct");
+
+        const auto expanded =
+            ExpTMCompaction::expanded_neighbors(partition);
+
+        expect(
+            expanded == partition.neighbors,
+            "reference expansion reproduces compacted neighbor stream");
+    }
+
+    void test_exp_tm_compaction_multiple_active_vertices()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMCompaction;
+
+        // Graph:
+        //
+        // 0 -> 1, 2
+        // 1 -> 2
+        // 2 -> 0, 3
+        // 3 -> 1
+        //
+        // Activate vertices 0 and 2.
+        //
+        // Expected compacted edge stream:
+        //
+        // vertex 0: [1, 2]
+        // vertex 2: [0, 3]
+        //
+        // neighbors = [1, 2, 0, 3]
+        // index     = [0, 2, 4]
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 5, 6},
+            {1, 2, 2, 0, 3, 1});
+
+        LogicalPartitioner partitioner(
+            16U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(
+            partitions.size() == 1U,
+            "large partition target keeps graph in one logical partition");
+
+        ActivityTracker activity(graph.num_vertices());
+
+        activity.set_active(0);
+        activity.set_active(2);
+
+        ExpTMCompaction compaction(true);
+
+        const auto result =
+            compaction.compact(graph, partitions, activity);
+
+        expect(
+            result.compacted_partition_count() == 1U,
+            "active vertices in one partition produce one compacted partition");
+
+        expect(
+            result.active_vertex_count() == 2U,
+            "two active source vertices are represented");
+
+        expect(
+            result.active_edge_count() == 4U,
+            "two active source vertices contribute four edges");
+
+        const auto &partition = result.partitions.front();
+
+        expect(
+            partition.active_vertices ==
+                std::vector<CSRGraph::vertex_id>{0, 2},
+            "active source vertices remain in ascending source order");
+
+        expect(
+            partition.neighbors ==
+                std::vector<CSRGraph::vertex_id>{1, 2, 0, 3},
+            "active neighbors are packed in source order");
+
+        expect(
+            partition.neighbor_index ==
+                std::vector<CSRGraph::offset_type>{0, 2, 4},
+            "compressed index contains the correct row boundaries");
+
+        expect(
+            partition.active_edge_count() ==
+                static_cast<CSRGraph::offset_type>(
+                    partition.neighbors.size()),
+            "partition edge count equals compacted neighbor count");
+
+        const auto expanded =
+            ExpTMCompaction::expanded_neighbors(partition);
+
+        expect(
+            expanded ==
+                std::vector<CSRGraph::vertex_id>{1, 2, 0, 3},
+            "expanded compacted stream preserves all active neighbors");
+    }
+
+    void test_exp_tm_compaction_skips_inactive_partitions()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMCompaction;
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 5},
+            {1, 2, 2, 0, 0});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(
+            partitions.size() > 1U,
+            "small partition target produces multiple partitions");
+
+        ActivityTracker activity(graph.num_vertices());
+
+        // Activate a vertex in the first partition only.
+        activity.set_active(0);
+
+        ExpTMCompaction compaction(true);
+
+        const auto result =
+            compaction.compact(graph, partitions, activity);
+
+        expect(
+            result.compacted_partition_count() == 1U,
+            "inactive partitions are omitted from compacted result");
+
+        expect(
+            result.partitions.front().partition_index == 0U,
+            "the active partition is retained");
+
+        expect(
+            result.active_edge_count() == 2U,
+            "only edges from the active source are compacted");
+
+        expect(
+            result.active_edge_count() <
+                static_cast<CSRGraph::offset_type>(graph.num_edges()),
+            "compaction removes inactive-source edge data");
+    }
+
+    void test_exp_tm_compaction_zero_degree_active_vertex()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMCompaction;
+
+        // Vertex 1 is active but has no outgoing edges.
+        CSRGraph graph(
+            3,
+            {0, 1, 1, 2},
+            {1, 0});
+
+        LogicalPartitioner partitioner(
+            16U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+        activity.set_active(1);
+
+        ExpTMCompaction compaction(true);
+
+        const auto result =
+            compaction.compact(graph, partitions, activity);
+
+        expect(
+            result.compacted_partition_count() == 1U,
+            "active zero-degree vertex still produces a compacted partition");
+
+        expect(
+            result.active_vertex_count() == 1U,
+            "zero-degree active vertex is represented");
+
+        expect(
+            result.active_edge_count() == 0U,
+            "zero-degree active vertex contributes no edges");
+
+        const auto &partition = result.partitions.front();
+
+        expect(
+            partition.active_vertices ==
+                std::vector<CSRGraph::vertex_id>{1},
+            "zero-degree active vertex is retained");
+
+        expect(
+            partition.neighbors.empty(),
+            "zero-degree active vertex has no compacted neighbors");
+
+        expect(
+            partition.neighbor_index ==
+                std::vector<CSRGraph::offset_type>{0, 0},
+            "zero-degree vertex receives an empty compressed range");
+
+        const auto expanded =
+            ExpTMCompaction::expanded_neighbors(partition);
+
+        expect(
+            expanded.empty(),
+            "expansion of zero-degree compacted vertex is empty");
+    }
+
+    void test_exp_tm_compaction_all_active_preserves_edges()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMCompaction;
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 5},
+            {1, 2, 2, 0, 0});
+
+        LogicalPartitioner partitioner(
+            16U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+
+        activity.set_active_vertices(
+            std::vector<CSRGraph::vertex_id>{0, 1, 2, 3});
+
+        expect(
+            activity.active_edge_count(graph) ==
+                static_cast<CSRGraph::offset_type>(graph.num_edges()),
+            "all-active activity contains every graph edge");
+
+        ExpTMCompaction compaction(true);
+
+        const auto result =
+            compaction.compact(graph, partitions, activity);
+
+        expect(
+            result.active_vertex_count() ==
+                static_cast<CSRGraph::offset_type>(
+                    graph.num_vertices()),
+            "all graph vertices are represented");
+
+        expect(
+            result.active_edge_count() ==
+                static_cast<CSRGraph::offset_type>(
+                    graph.num_edges()),
+            "all graph edges are preserved");
+
+        expect(
+            result.total_bytes() ==
+                graph.num_edges() *
+                        sizeof(CSRGraph::vertex_id) +
+                    graph.num_vertices() *
+                        sizeof(CSRGraph::offset_type) +
+                    sizeof(CSRGraph::offset_type),
+            "all-active compacted payload has expected neighbor and index size");
+
+        const auto &partition = result.partitions.front();
+
+        expect(
+            partition.active_vertices ==
+                std::vector<CSRGraph::vertex_id>{0, 1, 2, 3},
+            "all active vertices are retained in source order");
+
+        expect(
+            partition.neighbors ==
+                std::vector<CSRGraph::vertex_id>{
+                    1, 2, 2, 0, 0},
+            "all-active neighbor stream matches original CSR stream");
+
+        expect(
+            partition.neighbor_index ==
+                std::vector<CSRGraph::offset_type>{
+                    0, 2, 3, 4, 5},
+            "all-active compressed index matches original CSR row boundaries");
+    }
+
+    void test_exp_tm_compaction_disabled_reference_path()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMCompaction;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 2},
+            {1, 2});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+        activity.set_active(0);
+
+        ExpTMCompaction compaction(false);
+
+        expect(
+            !compaction.enabled(),
+            "disabled compaction reports disabled state");
+
+        const auto result =
+            compaction.compact(graph, partitions, activity);
+
+        expect(
+            result.partitions.empty(),
+            "disabled compaction returns no compacted partitions");
+
+        expect(
+            result.compaction_seconds == 0.0,
+            "disabled compaction does not report CPU compaction time");
+    }
+
+    void test_exp_tm_compaction_rejects_mismatched_activity()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ExpTMCompaction;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 2},
+            {1, 2});
+
+        LogicalPartitioner partitioner(
+            16U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(2);
+
+        ExpTMCompaction compaction(true);
+
+        bool threw = false;
+
+        try
+        {
+            (void)compaction.compact(
+                graph,
+                partitions,
+                activity);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+
+        expect(
+            threw,
+            "compaction rejects activity tracker with wrong vertex count");
+    }
+
+    void test_exp_tm_compaction_rejects_invalid_partition()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartition;
+        using hytgraph::transfer::ExpTMCompaction;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 2},
+            {1, 2});
+
+        ActivityTracker activity(graph.num_vertices());
+        activity.set_active(0);
+
+        // Deliberately construct a partition whose edge range does not
+        // correspond to its CSR vertex range.
+        LogicalPartition invalid_partition(
+            0,
+            2,
+            1,
+            2,
+            1024);
+
+        ExpTMCompaction compaction(true);
+
+        bool threw = false;
+
+        try
+        {
+            (void)compaction.compact(
+                graph,
+                {invalid_partition},
+                activity);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+
+        expect(
+            threw,
+            "compaction rejects partition with inconsistent CSR boundary");
+    }
 } // namespace
 
 int main()
@@ -1055,6 +1586,15 @@ int main()
         test_exp_tm_filter_full_partition_transfer();
         test_exp_tm_filter_disabled_reference_path();
         test_exp_tm_filter_rejects_mismatched_activity();
+
+        test_exp_tm_compaction_basic();
+        test_exp_tm_compaction_multiple_active_vertices();
+        test_exp_tm_compaction_skips_inactive_partitions();
+        test_exp_tm_compaction_zero_degree_active_vertex();
+        test_exp_tm_compaction_all_active_preserves_edges();
+        test_exp_tm_compaction_disabled_reference_path();
+        test_exp_tm_compaction_rejects_mismatched_activity();
+        test_exp_tm_compaction_rejects_invalid_partition();
 
         std::cout << "All Phase 0 unit tests passed.\n";
         return 0;

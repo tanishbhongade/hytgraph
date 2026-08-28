@@ -24,6 +24,7 @@ add_library(hytgraph_runtime
     src/graph/csr_graph.cpp
     src/graph/graph_loader.cpp
     src/graph/activity_tracker.cpp
+    src/graph/partition.cpp
 )
 
 target_include_directories(hytgraph_runtime PUBLIC

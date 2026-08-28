@@ -11,6 +11,8 @@
 #include <stdexcept>
 #include "graph/graph_loader.hpp"
 
+#include "graph/partition.hpp"
+
 namespace
 {
 
@@ -467,6 +469,322 @@ namespace
         }
     }
 
+    void test_logical_partition_basic()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+
+        // Graph:
+        //
+        // 0 -> 1, 2
+        // 1 -> 2
+        // 2 -> 0
+        // 3 -> 0
+        //
+        // CSR:
+        // row_offsets    = [0, 2, 3, 4, 5]
+        // column_indices = [1, 2, 2, 0, 0]
+        //
+        // Use a very small target so that multiple logical partitions
+        // are created for this test.
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 5},
+            {1, 2, 2, 0, 0});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(!partitions.empty(),
+               "partitioner creates at least one partition");
+
+        expect(partitions.front().vertex_begin() == 0,
+               "first partition begins at vertex zero");
+
+        expect(partitions.back().vertex_end() == graph.num_vertices(),
+               "last partition ends at num_vertices");
+
+        CSRGraph::offset_type total_edges = 0;
+
+        CSRGraph::vertex_id expected_vertex_begin = 0;
+        CSRGraph::offset_type expected_edge_begin = 0;
+
+        for (const auto &partition : partitions)
+        {
+            expect(partition.vertex_begin() == expected_vertex_begin,
+                   "partitions have contiguous vertex ranges");
+
+            expect(partition.edge_begin() == expected_edge_begin,
+                   "partitions have contiguous edge ranges");
+
+            expect(partition.vertex_begin() <= partition.vertex_end(),
+                   "partition vertex range is valid");
+
+            expect(partition.edge_begin() <= partition.edge_end(),
+                   "partition edge range is valid");
+
+            total_edges += partition.edge_count();
+
+            expected_vertex_begin = partition.vertex_end();
+            expected_edge_begin = partition.edge_end();
+        }
+
+        expect(total_edges == graph.num_edges(),
+               "partition edge totals equal graph edge count");
+    }
+
+    void test_logical_partition_default_size()
+    {
+        using hytgraph::graph::LogicalPartitioner;
+
+        LogicalPartitioner partitioner;
+
+        expect(
+            partitioner.partition_bytes() ==
+                LogicalPartitioner::kDefaultPartitionBytes,
+            "default logical partition size is 32 MiB");
+    }
+
+    void test_logical_partition_configuration()
+    {
+        using hytgraph::graph::LogicalPartitioner;
+
+        constexpr std::size_t custom_size = 1024U;
+
+        LogicalPartitioner partitioner(custom_size);
+
+        expect(partitioner.partition_bytes() == custom_size,
+               "custom logical partition size is preserved");
+    }
+
+    void test_logical_partition_empty_graph()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+
+        CSRGraph graph(
+            0,
+            {0},
+            {});
+
+        LogicalPartitioner partitioner;
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(partitions.empty(),
+               "empty graph produces no logical partitions");
+    }
+
+    void test_logical_partition_zero_degree_vertices()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+
+        // Four isolated vertices.
+        CSRGraph graph(
+            4,
+            {0, 0, 0, 0, 0},
+            {});
+
+        LogicalPartitioner partitioner(
+            sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(!partitions.empty(),
+               "graph with isolated vertices still produces partitions");
+
+        expect(partitions.front().vertex_begin() == 0,
+               "isolated-vertex graph starts at vertex zero");
+
+        expect(partitions.back().vertex_end() == graph.num_vertices(),
+               "isolated-vertex graph covers all vertices");
+
+        CSRGraph::offset_type total_edges = 0;
+
+        for (const auto &partition : partitions)
+        {
+            total_edges += partition.edge_count();
+        }
+
+        expect(total_edges == 0,
+               "isolated-vertex graph has zero partition edges");
+    }
+
+    void test_logical_partition_large_vertex()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+
+        // Vertex 0 has four outgoing edges. The requested partition
+        // size is smaller than this adjacency list, so the vertex cannot
+        // be split across logical partitions.
+        CSRGraph graph(
+            3,
+            {0, 4, 4, 4},
+            {1, 2, 1, 2});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(!partitions.empty(),
+               "large adjacency vertex still produces a partition");
+
+        expect(partitions.front().vertex_begin() == 0,
+               "large adjacency partition begins at vertex zero");
+
+        expect(partitions.front().vertex_end() >= 1,
+               "large adjacency vertex remains intact");
+
+        CSRGraph::offset_type total_edges = 0;
+
+        for (const auto &partition : partitions)
+        {
+            total_edges += partition.edge_count();
+        }
+
+        expect(total_edges == graph.num_edges(),
+               "large adjacency vertex does not lose edges");
+    }
+
+    void test_logical_partition_invalid_size()
+    {
+        using hytgraph::graph::LogicalPartitioner;
+
+        bool threw = false;
+
+        try
+        {
+            LogicalPartitioner partitioner(0);
+            (void)partitioner;
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "zero partition size is rejected");
+    }
+    void test_logical_partition_edge_boundaries()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+
+        CSRGraph graph(
+            5,
+            {0, 2, 2, 5, 6, 8},
+            {1, 2, 0, 1, 4, 3, 0, 2});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(!partitions.empty(),
+               "edge-boundary test creates partitions");
+
+        for (std::size_t i = 0; i < partitions.size(); ++i)
+        {
+            const auto &partition = partitions[i];
+
+            expect(
+                partition.edge_begin() ==
+                    graph.neighbor_range(partition.vertex_begin()).first,
+                "partition edge_begin matches CSR row boundary");
+
+            expect(
+                partition.edge_end() ==
+                    graph.neighbor_range(partition.vertex_end() - 1U).second,
+                "partition edge_end matches CSR row boundary");
+
+            if (i > 0)
+            {
+                const auto &previous = partitions[i - 1];
+
+                expect(
+                    previous.vertex_end() == partition.vertex_begin(),
+                    "adjacent partitions share exactly one vertex boundary");
+
+                expect(
+                    previous.edge_end() == partition.edge_begin(),
+                    "adjacent partitions share exactly one edge boundary");
+            }
+        }
+    }
+
+    void test_logical_partition_full_vertex_coverage()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+
+        CSRGraph graph(
+            8,
+            {0, 1, 3, 3, 6, 7, 9, 9, 10},
+            {1, 2, 3, 0, 4, 5, 6, 2, 7, 1});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(!partitions.empty(),
+               "coverage test creates partitions");
+
+        CSRGraph::vertex_id next_vertex = 0;
+
+        for (const auto &partition : partitions)
+        {
+            expect(
+                partition.vertex_begin() == next_vertex,
+                "partition sequence has no vertex gaps or overlaps");
+
+            next_vertex = partition.vertex_end();
+        }
+
+        expect(
+            next_vertex == graph.num_vertices(),
+            "partitions cover every graph vertex");
+    }
+
+    void test_logical_partition_full_edge_coverage()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+
+        CSRGraph graph(
+            6,
+            {0, 3, 3, 5, 8, 8, 10},
+            {1, 2, 3, 0, 4, 0, 1, 5, 2, 3});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        expect(!partitions.empty(),
+               "edge coverage test creates partitions");
+
+        CSRGraph::offset_type next_edge = 0;
+
+        for (const auto &partition : partitions)
+        {
+            expect(
+                partition.edge_begin() == next_edge,
+                "partition sequence has no edge gaps or overlaps");
+
+            next_edge = partition.edge_end();
+        }
+
+        expect(
+            next_edge == graph.num_edges(),
+            "partitions cover every graph edge");
+    }
 } // namespace
 
 int main()
@@ -486,6 +804,10 @@ int main()
         test_graph_loader_weighted();
         test_graph_loader_parallel_edges();
         test_graph_loader_invalid_input();
+
+        test_logical_partition_edge_boundaries();
+        test_logical_partition_full_vertex_coverage();
+        test_logical_partition_full_edge_coverage();
 
         std::cout << "All Phase 0 unit tests passed.\n";
         return 0;

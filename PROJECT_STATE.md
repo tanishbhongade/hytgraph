@@ -2,29 +2,29 @@
 
 ## Current Phase
 
-**Phase 7 — ImpTM-Zero-Copy**
+**Phase 8 — HyTM Cost Model**
 
 ## Current Milestone
 
-**M8 — ImpTM-Zero-Copy**
+**M9 — HyTM Cost Model**
 
 ## Current Task
 
-Phase 7 paper/code fidelity review completed. ImpTM-Zero-Copy is complete at the reference/modeling level. The project is ready to begin Phase 8 — HyTM Cost Model.
+Phase 8 paper/code fidelity review completed. The HyTM Cost Model is complete at the CPU/reference-model level and has been locally validated. The project is ready for the next phase of the reproduction plan.
 
 ## Status
 
 **COMPLETE**
 
-ImpTM-Zero-Copy request-count and alignment modeling has been implemented and locally validated. The implementation has been reviewed against the paper and the reproduction plan.
+The HyTM Cost Model, including the paper-derived transfer costs, zero-copy RTT model, deterministic per-partition selector, and unit tests, has been implemented and locally validated. The implementation has been reviewed against the paper, the reproduction plan, and the existing transfer abstractions.
 
 The implementation explicitly distinguishes:
 
-- modeled zero-copy behavior
-- alignment/request metrics
-- actual mapped host-memory execution
+- paper-derived cost modeling
+- deterministic transfer-engine selection
+- hardware/runtime-dependent execution
 
-No actual CUDA mapped/pinned-memory execution is claimed.
+No complete CUDA runtime reproduction or benchmark equivalence is claimed.
 
 ---
 
@@ -288,19 +288,21 @@ Current reproduction architecture:
 
 The transfer engines remain separate reference/modeling components.
 
+The HyTM Cost Model now consumes graph, activity, and logical-partition information and evaluates the three transfer strategies independently for each partition.
+
 ---
 
 # Phase 8 — HyTM Cost Model
 
-**Status:** NOT STARTED
+**Status:** COMPLETE
 
 ## Objective
 
-Implement the HyTM cost model and deterministic transfer-engine selector described in the paper.
+Implemented the HyTM cost model and deterministic transfer-engine selector described in the paper.
 
-The implementation must remain scoped to the cost model and selector.
+The implementation remains scoped to the cost model and selector.
 
-Do not implement later scheduling/task-combining phases yet.
+Later scheduling/task-combining phases are not implemented.
 
 ---
 
@@ -423,6 +425,32 @@ The CPU compaction throughput must be configurable rather than inventing a paper
 
 ---
 
+# Phase 8 Implementation Status
+
+The following files were added or modified for Phase 8:
+
+    include/transfer/hytm_cost_model.hpp
+    src/transfer/hytm_cost_model.cpp
+    CMakeLists.txt
+    tests/unit_tests.cpp
+
+The Phase 8 tests were integrated into the existing `tests/unit_tests.cpp` target. No separate Phase 8 test executable was introduced.
+
+The implementation exposes:
+
+- `HyTMCostModelOptions`
+- `HyTMPartitionMetrics`
+- `HyTMPartitionCosts`
+- `HyTMCostModel`
+- `TransferEngine`
+- per-partition evaluation
+- multi-partition evaluation
+- deterministic engine selection
+
+The implementation validates model parameters and graph/partition/activity consistency and uses checked arithmetic for the byte/request calculations.
+
+---
+
 # Phase 8 Important Distinction
 
 The Phase 7 zero-copy implementation intentionally reports:
@@ -476,7 +504,7 @@ Tests should include deterministic synthetic cases covering:
 9. Invalid cost-model configuration
 10. Per-partition independence
 
-The tests must not depend on CUDA hardware.
+The tests do not depend on CUDA hardware.
 
 ---
 
@@ -494,6 +522,34 @@ Phase 8 must NOT implement:
 - later evaluation phases
 
 Those belong to later phases of the reproduction plan.
+
+---
+
+# Phase 8 Validation Result
+
+The repository owner ran:
+
+    cmake -S . -B build -DHYTGRAPH_ENABLE_CUDA=OFF
+    cmake --build build -j
+    ctest --test-dir build --output-on-failure
+
+Build result:
+
+    PASS
+
+CTest result:
+
+    1/3 Test #1: unit_tests ....................... Passed
+    2/3 Test #2: algorithm_tests .................. Passed
+    3/3 Test #3: experiment_runner_smoke .......... Passed
+
+    100% tests passed, 0 tests failed out of 3
+
+    Total Test time = 0.11 sec
+
+The three CTest entries are the project's registered test executables. The Phase 8 test cases themselves are integrated into `unit_tests`.
+
+CUDA was explicitly disabled for this validation. Therefore this result confirms the CPU/reference Phase 8 implementation, but does not constitute CUDA-enabled validation.
 
 ---
 
@@ -543,9 +599,9 @@ They are not claimed to represent every physical PCIe transaction or runtime met
 
 ## 8. CUDA Execution
 
-The current validation environment has CUDA disabled.
+The latest Phase 8 validation was run with CUDA explicitly disabled using `-DHYTGRAPH_ENABLE_CUDA=OFF`.
 
-The CPU/reference implementation is therefore the primary reproducibility layer.
+The CPU/reference implementation is therefore the currently validated reproducibility layer.
 
 ## 9. Zero-Copy Mapping
 
@@ -569,11 +625,11 @@ Phase 8 must combine them when applying the paper's zero-copy cost equation.
 
 A reproducible paper-specific CPU compaction throughput measurement is not currently available from the project sources.
 
-Phase 8 should therefore expose throughput as a configurable model parameter.
+Phase 8 exposes throughput as a configurable model parameter rather than inventing a paper-specific measured value.
 
 ## 13. No Benchmark Claims
 
-No performance or benchmark equivalence to the original HyTGraph implementation is currently claimed.
+No performance or benchmark equivalence to the original HyTGraph implementation is currently claimed. The Phase 8 result is a deterministic CPU/reference cost model and selector.
 
 ---
 
@@ -625,7 +681,7 @@ CUDA:
 
 # Current Milestone
 
-    M8 — ImpTM-Zero-Copy
+    M9 — HyTM Cost Model
 
 Status:
 
@@ -635,20 +691,16 @@ Status:
 
 # Next Milestone
 
-    M9 — HyTM Cost Model
+    Next phase after M9 — HyTM Cost Model
 
 Status:
 
-    READY TO START
+    READY TO DETERMINE FROM MASTER_PLAN.md
 
 ---
 
 # NEXT TASK
 
-**Phase 8 — HyTM Cost Model**
+**Next task:** Determine the single next task specified by `MASTER_PLAN.md` after Phase 8 — HyTM Cost Model.
 
-First implementation step:
-
-    Create include/transfer/hytm_cost_model.hpp
-
-Provide the header only first. Do not implement the `.cpp`, CMake changes, or tests until the header has been added and validated locally.
+Before implementation, inspect the relevant plan section, paper mechanism, and current repository state. Then provide only the first required file and wait for local validation.

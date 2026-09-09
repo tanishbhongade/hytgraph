@@ -28,6 +28,7 @@ add_library(hytgraph_runtime
     src/transfer/filter_engine.cpp
     src/transfer/compaction_engine.cpp
     src/transfer/zero_copy_engine.cpp
+    src/transfer/hytm_cost_model.cpp
 )
 
 target_include_directories(hytgraph_runtime PUBLIC

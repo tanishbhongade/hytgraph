@@ -6,6 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <cmath>
 
 #include "graph/csr_graph.hpp"
 #include <stdexcept>
@@ -16,6 +17,7 @@
 
 #include "transfer/compaction_engine.hpp"
 #include "transfer/zero_copy_engine.hpp"
+#include "transfer/hytm_cost_model.hpp"
 
 namespace
 {
@@ -1929,6 +1931,217 @@ namespace
         expect(result.modeled_tlp_count == 0,
                "zero-degree active vertex requires no modeled TLP");
     }
+
+    void test_hytm_cost_model()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartition;
+        using hytgraph::transfer::HyTMCostModel;
+        using hytgraph::transfer::HyTMCostModelOptions;
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 4},
+            {1, 2, 2, 0});
+
+        ActivityTracker activity(graph.num_vertices());
+        activity.set_active_vertices({0, 1});
+
+        LogicalPartition partition(
+            0,
+            2,
+            0,
+            3,
+            1024U);
+
+        HyTMCostModelOptions options;
+        options.alpha = 0.80;
+        options.beta = 0.40;
+        options.gamma = 0.625;
+        options.request_payload_bytes = 128U;
+        options.max_requests_per_tlp = 256U;
+        options.rtt = 2.0;
+        options.cpu_compaction_throughput_bytes_per_second = 14.0;
+
+        HyTMCostModel model(options);
+
+        const auto result =
+            model.evaluate_partition(graph, partition, activity);
+
+        expect(
+            result.metrics.active_vertices == 2U,
+            "HyTM active vertex count");
+
+        expect(
+            result.metrics.active_edges == 3U,
+            "HyTM active edge count");
+
+        expect(
+            result.metrics.total_edges == 3U,
+            "HyTM total edge count");
+
+        // ExpTM-F:
+        // 3 edges * 4 bytes = 12 bytes.
+        // ceil(12 / (128 * 256)) = 1 TLP.
+        // Cost = 1 * 2 = 2.
+        expect(
+            result.metrics.filter_transfer_bytes == 12U,
+            "HyTM filter transfer bytes");
+
+        expect(
+            std::fabs(result.filter_cost - 2.0) < 1e-12,
+            "HyTM filter cost");
+
+        // ExpTM-C:
+        // 3 * 4 destination bytes + 2 * 8 index bytes = 28 bytes.
+        // Transfer = 2.
+        // CPU = 28 / 14 = 2.
+        // Total = 4.
+        expect(
+            result.metrics.compaction_bytes == 28U,
+            "HyTM compaction bytes");
+
+        expect(
+            std::fabs(result.compaction_cost - 4.0) < 1e-12,
+            "HyTM compaction cost");
+
+        // ImpTM-ZC:
+        // v0: ceil(2 * 4 / 128) = 1 request.
+        // v1: ceil(1 * 4 / 128) = 1 request.
+        //
+        // v0 starts at logical byte offset 0 -> aligned.
+        // v1 starts at logical byte offset 8 -> alignment overhead.
+        expect(
+            result.metrics.zero_copy_memory_requests == 2U,
+            "HyTM zero-copy memory requests");
+
+        expect(
+            result.metrics.zero_copy_alignment_overhead == 1U,
+            "HyTM zero-copy alignment overhead");
+
+        expect(
+            result.metrics.zero_copy_total_requests == 3U,
+            "HyTM zero-copy total requests");
+
+        // All partition edges are active, so RTTzc == RTT.
+        expect(
+            std::fabs(result.zero_copy_rtt - 2.0) < 1e-12,
+            "HyTM zero-copy RTT");
+
+        expect(
+            std::fabs(result.zero_copy_cost - 2.0) < 1e-12,
+            "HyTM zero-copy cost");
+    }
+    void test_hytm_selector()
+    {
+        using hytgraph::transfer::HyTMCostModel;
+        using hytgraph::transfer::TransferEngine;
+
+        // Compaction must satisfy both conditions strictly.
+        expect(
+            HyTMCostModel::select_engine(
+                10.0,
+                7.0,
+                20.0,
+                0.80,
+                0.40) == TransferEngine::ExpTMCompaction,
+            "HyTM selector chooses compaction");
+
+        // 7.0 == 0.80 * 10.0 is false for strict '<'.
+        // Filter is cheaper than zero-copy, so Filter wins.
+        expect(
+            HyTMCostModel::select_engine(
+                10.0,
+                8.0,
+                20.0,
+                0.80,
+                0.40) == TransferEngine::ExpTMFilter,
+            "HyTM selector uses strict alpha boundary");
+
+        // Filter == ZeroCopy means Filter does not win.
+        expect(
+            HyTMCostModel::select_engine(
+                10.0,
+                20.0,
+                10.0,
+                0.80,
+                0.40) == TransferEngine::ImpTMZeroCopy,
+            "HyTM selector uses strict filter boundary");
+
+        // Compaction == beta * ZeroCopy means compaction does not win.
+        expect(
+            HyTMCostModel::select_engine(
+                20.0,
+                8.0,
+                20.0,
+                0.80,
+                0.40) == TransferEngine::ImpTMZeroCopy,
+            "HyTM selector uses strict beta boundary");
+    }
+    void test_hytm_invalid_options()
+    {
+        using hytgraph::transfer::HyTMCostModel;
+        using hytgraph::transfer::HyTMCostModelOptions;
+
+        {
+            auto options = HyTMCostModelOptions{};
+            options.alpha = 0.0;
+
+            bool threw = false;
+
+            try
+            {
+                HyTMCostModel model(options);
+                (void)model;
+            }
+            catch (const std::invalid_argument &)
+            {
+                threw = true;
+            }
+
+            expect(threw, "HyTM rejects non-positive alpha");
+        }
+
+        {
+            auto options = HyTMCostModelOptions{};
+            options.gamma = 1.1;
+
+            bool threw = false;
+
+            try
+            {
+                HyTMCostModel model(options);
+                (void)model;
+            }
+            catch (const std::invalid_argument &)
+            {
+                threw = true;
+            }
+
+            expect(threw, "HyTM rejects gamma above one");
+        }
+
+        {
+            auto options = HyTMCostModelOptions{};
+            options.request_payload_bytes = 0U;
+
+            bool threw = false;
+
+            try
+            {
+                HyTMCostModel model(options);
+                (void)model;
+            }
+            catch (const std::invalid_argument &)
+            {
+                threw = true;
+            }
+
+            expect(threw, "HyTM rejects zero request payload");
+        }
+    }
+
 } // namespace
 
 int main()
@@ -1973,6 +2186,10 @@ int main()
         test_zero_copy_invalid_options();
         test_zero_copy_partition_validation();
         test_zero_copy_zero_degree_active_vertex();
+
+        test_hytm_cost_model();
+        test_hytm_selector();
+        test_hytm_invalid_options();
 
         std::cout << "All Phase 0 unit tests passed.\n";
         return 0;

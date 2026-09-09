@@ -19,6 +19,7 @@
 #include "transfer/hytm_cost_model.hpp"
 
 #include "scheduling/task_combiner.hpp"
+#include "scheduling/hub_sort.hpp"
 
 namespace
 {
@@ -2343,6 +2344,289 @@ namespace
             "empty input has zero executable tasks");
     }
 
+    void test_hub_sort_scores()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::scheduling::HubSorter;
+        using hytgraph::scheduling::HubSortOptions;
+
+        CSRGraph graph(
+            3,
+            {0, 2, 3, 4},
+            {1, 2, 2, 0});
+
+        HubSortOptions options;
+        options.hub_fraction = 2.0 / 3.0;
+
+        HubSorter sorter(options);
+        const auto result = sorter.sort(graph);
+
+        expect(result.scores.size() == 3U,
+               "hub sort score count");
+
+        expect(std::abs(result.scores[0] - 0.5) < 1e-12,
+               "vertex 0 hub score");
+
+        expect(std::abs(result.scores[1] - 0.25) < 1e-12,
+               "vertex 1 hub score");
+
+        expect(std::abs(result.scores[2] - 0.5) < 1e-12,
+               "vertex 2 hub score");
+    }
+
+    void test_hub_sort_places_hubs_first()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::scheduling::HubSorter;
+        using hytgraph::scheduling::HubSortOptions;
+
+        CSRGraph graph(
+            5,
+            {0, 3, 4, 5, 6, 7},
+            {1, 2, 3, 0, 0, 0, 0});
+
+        HubSortOptions options;
+        options.hub_fraction = 0.4;
+
+        HubSorter sorter(options);
+        const auto result = sorter.sort(graph);
+
+        expect(
+            result.hub_count == 2U,
+            "hub count: expected 2, got " +
+                std::to_string(result.hub_count));
+
+        expect(result.vertex_order.size() == 5U,
+               "all vertices returned");
+
+        expect(result.vertex_order[0] == 0U,
+               "highest-score hub comes first");
+
+        expect(result.vertex_order[1] == 1U,
+               "second hub comes second");
+
+        expect(result.vertex_order[2] == 2U,
+               "first non-hub retains natural order");
+
+        expect(result.vertex_order[3] == 3U,
+               "second non-hub retains natural order");
+
+        expect(result.vertex_order[4] == 4U,
+               "third non-hub retains natural order");
+    }
+
+    void test_hub_sort_returns_permutation()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::scheduling::HubSorter;
+
+        CSRGraph graph(
+            6,
+            {0, 2, 3, 4, 5, 6, 6},
+            {1, 2, 2, 3, 0, 0});
+
+        HubSorter sorter;
+        const auto result = sorter.sort(graph);
+
+        expect(result.vertex_order.size() == 6U,
+               "hub sort returns every vertex");
+
+        std::vector<bool> seen(6U, false);
+
+        for (const auto vertex : result.vertex_order)
+        {
+            expect(vertex < 6U,
+                   "hub sort vertex id is in range");
+
+            expect(!seen[vertex],
+                   "hub sort contains no duplicate vertices");
+
+            seen[vertex] = true;
+        }
+
+        for (std::size_t vertex = 0U; vertex < 6U; ++vertex)
+        {
+            expect(seen[vertex],
+                   "hub sort contains every vertex");
+        }
+    }
+
+    void test_hub_sort_edgeless_graph()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::scheduling::HubSorter;
+
+        CSRGraph graph(
+            4,
+            {0, 0, 0, 0, 0},
+            {});
+
+        HubSorter sorter;
+        const auto result = sorter.sort(graph);
+
+        expect(result.hub_count == 1U,
+               "positive default hub fraction selects one hub");
+
+        expect(result.vertex_order.size() == 4U,
+               "edgeless graph returns every vertex");
+
+        for (std::size_t vertex = 0U; vertex < 4U; ++vertex)
+        {
+            expect(result.scores[vertex] == 0.0,
+                   "edgeless graph has zero hub score");
+
+            expect(result.vertex_order[vertex] == vertex,
+                   "edgeless graph retains natural vertex order");
+        }
+    }
+
+    void test_csr_graph_reorder_vertices()
+    {
+        using hytgraph::graph::CSRGraph;
+
+        CSRGraph graph(
+            3,
+            {0, 2, 3, 4},
+            {1, 2, 2, 0});
+
+        graph.reorder_vertices({2, 0, 1});
+
+        expect(graph.num_vertices() == 3U,
+               "reordered graph preserves vertex count");
+
+        expect(graph.num_edges() == 4U,
+               "reordered graph preserves edge count");
+
+        expect(
+            graph.row_offsets() ==
+                std::vector<CSRGraph::offset_type>{0, 1, 3, 4},
+            "reordered graph has correct CSR row offsets");
+
+        expect(
+            graph.column_indices() ==
+                std::vector<CSRGraph::vertex_id>{1, 2, 0, 0},
+            "reordered graph remaps destination vertex IDs");
+
+        graph.validate();
+    }
+
+    void test_csr_graph_reorder_preserves_weights()
+    {
+        using hytgraph::graph::CSRGraph;
+
+        CSRGraph graph(
+            3,
+            {0, 2, 3, 4},
+            {1, 2, 2, 0},
+            {1.0F, 2.0F, 3.0F, 4.0F});
+
+        graph.reorder_vertices({2, 0, 1});
+
+        expect(graph.has_weights(),
+               "reordered weighted graph retains weights");
+
+        expect(
+            graph.edge_weights() ==
+                std::vector<CSRGraph::weight_type>{
+                    4.0F, 1.0F, 2.0F, 3.0F},
+            "reordered graph preserves edge-weight association");
+
+        graph.validate();
+    }
+
+    void test_csr_graph_reorder_rejects_invalid_order()
+    {
+        using hytgraph::graph::CSRGraph;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 3},
+            {1, 2, 0});
+
+        bool duplicate_rejected = false;
+
+        try
+        {
+            graph.reorder_vertices({0, 1, 1});
+        }
+        catch (const std::invalid_argument &)
+        {
+            duplicate_rejected = true;
+        }
+
+        expect(duplicate_rejected,
+               "reorder rejects duplicate vertex IDs");
+
+        bool wrong_size_rejected = false;
+
+        try
+        {
+            graph.reorder_vertices({0, 1});
+        }
+        catch (const std::invalid_argument &)
+        {
+            wrong_size_rejected = true;
+        }
+
+        expect(wrong_size_rejected,
+               "reorder rejects incorrect vertex-order size");
+
+        bool out_of_range_rejected = false;
+
+        try
+        {
+            graph.reorder_vertices({0, 1, 3});
+        }
+        catch (const std::invalid_argument &)
+        {
+            out_of_range_rejected = true;
+        }
+
+        expect(out_of_range_rejected,
+               "reorder rejects out-of-range vertex IDs");
+    }
+
+    void test_hub_sort_reorders_csr()
+    {
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::scheduling::HubSorter;
+        using hytgraph::scheduling::HubSortOptions;
+
+        CSRGraph graph(
+            5,
+            {0, 3, 4, 5, 6, 7},
+            {1, 2, 3, 0, 0, 0, 0});
+
+        HubSortOptions options;
+        options.hub_fraction = 0.4;
+
+        HubSorter sorter(options);
+        const auto result = sorter.sort(graph);
+
+        expect(result.hub_count == 2U,
+               "hub sorting selects two hubs");
+
+        expect(result.vertex_order[0] == 0U,
+               "highest-score hub is first");
+
+        expect(result.vertex_order[1] == 1U,
+               "second hub is second");
+
+        graph.reorder_vertices(result.vertex_order);
+
+        expect(
+            graph.row_offsets() ==
+                std::vector<CSRGraph::offset_type>{0, 3, 4, 5, 6, 7},
+            "hub sorting preserves CSR row structure");
+
+        expect(
+            graph.column_indices() ==
+                std::vector<CSRGraph::vertex_id>{1, 2, 3, 0, 0, 0, 0},
+            "hub sorting preserves correctly mapped CSR destinations");
+
+        graph.validate();
+    }
+
 } // namespace
 
 int main()
@@ -2398,6 +2682,16 @@ int main()
         test_task_combiner_zero_copy();
         test_task_combiner_reduces_task_count();
         test_task_combiner_empty_input();
+
+        test_hub_sort_scores();
+        test_hub_sort_places_hubs_first();
+        test_hub_sort_returns_permutation();
+        test_hub_sort_edgeless_graph();
+
+        test_csr_graph_reorder_vertices();
+        test_csr_graph_reorder_preserves_weights();
+        test_csr_graph_reorder_rejects_invalid_order();
+        test_hub_sort_reorders_csr();
 
         std::cout << "All Phase 0 unit tests passed.\n";
         return 0;

@@ -2,30 +2,34 @@
 
 ## Current Phase
 
-**Phase 9 — Task Combining**
+**Phase 10 — Hub Sorting**
 
 ## Current Milestone
 
-**M10 — Task Combining**
+**M11 — Hub Sorting**
 
 ## Current Task
 
-Phase 9 Task Combining has been implemented, reviewed, and locally validated. The project is ready to stop at this point, with the next planned phase being Phase 10 — Hub Sorting.
+Phase 10 Hub Sorting has been implemented, reviewed, integrated with CSR vertex reordering, and locally validated. The project is ready to stop at this point, with the next planned phase being Phase 11 — Contribution-Driven Scheduling.
 
 ## Status
 
 **COMPLETE**
 
-The Task Combining layer now converts per-logical-partition HyTM engine selections into executable-task groups while preserving the paper-aligned distinction between consecutive Filter grouping and broader Compaction / Zero-Copy grouping.
+The Hub Sorting layer now computes paper-aligned hub importance scores, selects approximately the configured top fraction of vertices as hubs, produces a deterministic hub-first vertex ordering, and supports preparation-time CSR vertex reordering using that ordering.
 
 The implementation explicitly distinguishes:
 
-- paper-aligned task-combination behavior
-- executable-task metadata and metrics
-- deterministic task ordering
-- hardware/runtime-dependent execution
+- paper-aligned hub importance scoring
+- approximate top-8% hub selection
+- deterministic hub-first ordering
+- natural ordering of non-hub vertices
+- preparation-time CSR vertex reordering
+- destination-vertex ID remapping
+- preservation of edge weights
+- hardware/runtime-dependent scheduling behavior
 
-No complete CUDA task-execution pipeline or benchmark equivalence is claimed.
+No complete contribution-driven scheduling pipeline or benchmark equivalence is claimed.
 
 ---
 
@@ -281,7 +285,7 @@ The tests remain integrated into the existing `unit_tests` executable. No separa
 
 # Phase 9 Validation Result
 
-The repository owner ran:
+The repository owner previously ran:
 
     cmake --build build -j
     ctest --test-dir build --output-on-failure
@@ -299,11 +303,9 @@ CTest result:
 
     100% tests passed, 0 tests failed out of 4
 
-    Total Test time = 1.83 sec
-
 The CUDA algorithm tests passed in this validation.
 
-This confirms the current build and test state supplied by the repository owner. No additional benchmark or performance claim is made.
+This confirms the Phase 9 build and test state. No additional benchmark or performance claim is made.
 
 ---
 
@@ -395,6 +397,199 @@ Those later mechanisms remain future work.
 
 ---
 
+# Phase 10 — Hub Sorting
+
+**Status:** COMPLETE
+
+## Objective
+
+Implemented the Hub Sorting layer described in the paper and reproduction plan.
+
+The implementation computes a hub importance score for every vertex:
+
+    H(v) = Do(v) * Di(v) / (Do_max * Di_max)
+
+where:
+
+- `Do(v)` = vertex out-degree
+- `Di(v)` = vertex in-degree
+- `Do_max` = maximum out-degree in the graph
+- `Di_max` = maximum in-degree in the graph
+
+The default hub fraction is:
+
+    hub_fraction = 0.08
+
+The selected hubs are placed at the beginning of the vertex ordering.
+
+Non-hub vertices retain their natural vertex-ID order.
+
+Hub sorting is intended as a preparation-time operation rather than an operation performed on every algorithm iteration.
+
+---
+
+## Phase 10 Requirements
+
+Implemented:
+
+- in-degree calculation from CSR adjacency
+- out-degree-based hub scoring
+- paper-aligned hub importance equation
+- configurable hub fraction
+- approximate top-fraction hub selection
+- deterministic score ordering
+- deterministic vertex-ID tie breaking
+- hub-first vertex ordering
+- natural ordering of non-hubs
+- CSR vertex reordering
+- CSR destination-ID remapping
+- edge-weight preservation
+- final CSR validation
+
+The `HubSorter` produces:
+
+    vertex_order
+    scores
+    hub_count
+
+The ordering uses:
+
+    vertex_order[new_vertex] = old_vertex
+
+The resulting order is then applied to the CSR graph through `CSRGraph::reorder_vertices()`.
+
+---
+
+# Phase 10 Files
+
+The following files were added or modified for Phase 10:
+
+    include/scheduling/hub_sort.hpp
+    src/scheduling/hub_sort.cpp
+    include/graph/csr_graph.hpp
+    src/graph/csr_graph.cpp
+    CMakeLists.txt
+    tests/unit_tests.cpp
+
+---
+
+# Phase 10 Tests
+
+The existing namespace-based `tests/unit_tests.cpp` test target was extended with Hub Sorting and CSR-reordering coverage for:
+
+1. Hub importance score calculation.
+2. Hub selection and hub-first ordering.
+3. Deterministic vertex permutation generation.
+4. Edgeless graph handling.
+5. CSR vertex reordering.
+6. CSR destination-ID remapping.
+7. CSR edge-weight preservation.
+8. Invalid vertex-order rejection.
+9. End-to-end HubSorter → CSRGraph reordering integration.
+
+The tests remain integrated into the existing `unit_tests` executable. No separate Phase 10 test executable was introduced.
+
+---
+
+# Phase 10 Validation Result
+
+The repository owner ran:
+
+    ctest --test-dir build --output-on-failure
+
+CTest result:
+
+    1/4 Test #1: unit_tests ....................... Passed
+    2/4 Test #2: algorithm_tests .................. Passed
+    3/4 Test #3: cuda_algorithm_tests ............. Passed
+    4/4 Test #4: experiment_runner_smoke .......... Passed
+
+    100% tests passed, 0 tests failed out of 4
+
+    Total Test time = 2.06 sec
+
+The CUDA algorithm tests passed in this validation.
+
+This confirms the current Phase 10 build/test state supplied by the repository owner.
+
+No additional benchmark or performance claim is made.
+
+---
+
+# Phase 10 Important Implementation Details
+
+## Hub Score
+
+For each vertex:
+
+    H(v) = Do(v) * Di(v) / (Do_max * Di_max)
+
+The implementation first computes the in-degree of every destination vertex from the CSR column indices.
+
+The out-degree is obtained directly from the CSR row offsets.
+
+Vertices are ranked by descending hub score.
+
+Ties are resolved by ascending vertex ID to provide deterministic behavior.
+
+## Hub Selection
+
+The configured fraction is applied to the total vertex count.
+
+The default configuration follows the paper's approximately top-8% hub selection.
+
+The implementation uses a ceiling for positive fractional hub counts, with numerical stabilization around values that are effectively exact integers.
+
+This provides deterministic behavior for small synthetic graphs while preserving the intended approximate top-fraction behavior.
+
+## Hub Ordering
+
+The resulting ordering is:
+
+    hubs in descending score order
+    non-hubs in natural vertex-ID order
+
+Only the selected hub prefix is reordered by score.
+
+Non-hub vertices are not score-sorted.
+
+## CSR Reordering
+
+`CSRGraph::reorder_vertices()` interprets the supplied ordering as:
+
+    vertex_order[new_vertex] = old_vertex
+
+The function:
+
+1. validates that the ordering is a complete permutation
+2. builds an old-to-new vertex-ID mapping
+3. copies each old adjacency list into its new vertex position
+4. remaps destination vertex IDs
+5. preserves edge weights
+6. replaces the CSR arrays
+7. validates the resulting CSR graph
+
+The permutation is validated before modifying the graph.
+
+---
+
+# Phase 10 Paper Fidelity
+
+The implementation follows the paper's hub-sorting mechanism:
+
+- vertices with high incoming and outgoing degree receive higher hub scores
+- hub importance uses the degree-product score
+- approximately the top 8% are selected
+- hubs are grouped at the beginning of the CSR ordering
+- non-hubs retain natural ordering
+- hub sorting is treated as a preparation-time operation
+
+The paper's later hub-driven scheduling behavior is not implemented as part of Phase 10.
+
+The current phase therefore provides the hub ordering foundation required by the later scheduling phase without prematurely introducing unsupported scheduling behavior.
+
+---
+
 # Known Issues / Engineering Approximations
 
 The following are known and intentionally documented.
@@ -435,7 +630,7 @@ They are not claimed to represent every physical PCIe transaction or runtime met
 
 ## 7. CUDA Execution
 
-The transfer-engine and task-combination layers remain reference/modeling components.
+The transfer-engine, task-combination, and hub-sorting layers remain reference/modeling or preparation components.
 
 Passing CUDA algorithm tests does not mean the complete HyTGraph CUDA runtime has been reproduced.
 
@@ -481,6 +676,30 @@ This is a build-configuration convenience to avoid guessing a GPU architecture. 
 
 No performance or benchmark equivalence to the original HyTGraph implementation is currently claimed.
 
+## 15. Hub Count for Small Graphs
+
+The paper specifies approximately the top 8% but does not specify exact rounding behavior for very small graphs.
+
+The implementation uses deterministic ceiling behavior for positive fractional counts, with numerical stabilization around exact integer values.
+
+This is an engineering approximation for small synthetic graphs.
+
+## 16. Zero-Degree Graphs
+
+For graphs where the maximum in-degree or maximum out-degree is zero, the hub-score denominator is undefined.
+
+The implementation assigns zero scores in this case rather than performing division by zero.
+
+This is an engineering edge-case decision.
+
+## 17. Vertex Renumbering
+
+`CSRGraph::reorder_vertices()` changes the internal vertex numbering according to the supplied ordering and remaps destination IDs accordingly.
+
+Hub sorting is therefore intended to run during preparation rather than repeatedly after algorithm state has been established.
+
+Callers that maintain external vertex-ID state must account for the resulting renumbering.
+
 ---
 
 # Validation Policy
@@ -495,6 +714,8 @@ For every new phase:
 6. Review any failures.
 7. Continue to the next file only after validation.
 
+For large existing files such as `tests/unit_tests.cpp`, only the required changes/snippets should be provided rather than replacing the complete file.
+
 Do not claim local execution unless the user provides the result.
 
 ---
@@ -507,31 +728,47 @@ Do not write, modify, delete, or generate files directly inside the repository.
 
 All implementation files must be provided as copy-pasteable content for the user to add manually.
 
+The repository's GitHub state may not contain the user's unpushed local changes. The user's local working tree is authoritative for newly implemented phases until those changes are committed/pushed by the repository owner.
+
 ---
 
 # Current Validation Status
 
 Last confirmed project validation:
 
-    cmake --build build -j
-    PASS
-
     ctest --test-dir build --output-on-failure
     PASS
+
+CTest result:
 
     100% tests passed
     0 tests failed
     4 tests passed
 
+Individual tests:
+
+    unit_tests ....................... Passed
+    algorithm_tests .................. Passed
+    cuda_algorithm_tests ............. Passed
+    experiment_runner_smoke .......... Passed
+
+Total test time:
+
+    2.06 sec
+
 CUDA algorithm tests:
 
     PASSED
+
+The current Phase 10 validation confirms the Hub Sorting, CSR reordering, existing algorithm tests, CUDA algorithm tests, and experiment-runner smoke test targets are passing.
+
+No benchmark or performance equivalence is claimed.
 
 ---
 
 # Current Milestone
 
-    M10 — Task Combining
+    M11 — Hub Sorting
 
 Status:
 
@@ -541,7 +778,7 @@ Status:
 
 # Next Milestone
 
-    M11 — Hub Sorting
+    M12 — Contribution-Driven Scheduling
 
 Status:
 
@@ -551,8 +788,8 @@ Status:
 
 # NEXT TASK
 
-**Next task:** Phase 10 — Hub Sorting.
+**Next task:** Phase 11 — Contribution-Driven Scheduling.
 
 The project is intentionally stopped here for this handoff.
 
-Before implementation resumes, inspect the relevant Phase 10 section of `MASTER_PLAN.md`, the original paper mechanism, and the current repository state. Then provide only the first required file and wait for local validation.
+Before implementation resumes, inspect the relevant Phase 11 section of `MASTER_PLAN.md`, the original paper mechanism, and the current repository state. Then provide only the first required file and wait for local validation.

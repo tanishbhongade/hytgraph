@@ -168,4 +168,117 @@ namespace hytgraph::graph
         }
     }
 
+    void CSRGraph::reorder_vertices(
+        const std::vector<vertex_id> &vertex_order)
+    {
+        const auto vertex_count =
+            static_cast<std::size_t>(num_vertices_);
+
+        if (vertex_order.size() != vertex_count)
+        {
+            throw std::invalid_argument(
+                "CSRGraph::reorder_vertices: vertex_order must contain "
+                "exactly one entry per vertex");
+        }
+
+        // vertex_order[new_vertex] = old_vertex.
+        // Validate that it is a complete permutation before modifying the graph.
+        std::vector<bool> seen(vertex_count, false);
+
+        for (const vertex_id old_vertex : vertex_order)
+        {
+            const auto old_index =
+                static_cast<std::size_t>(old_vertex);
+
+            if (old_index >= vertex_count)
+            {
+                throw std::invalid_argument(
+                    "CSRGraph::reorder_vertices: vertex_order contains "
+                    "an out-of-range vertex ID");
+            }
+
+            if (seen[old_index])
+            {
+                throw std::invalid_argument(
+                    "CSRGraph::reorder_vertices: vertex_order contains "
+                    "duplicate vertex IDs");
+            }
+
+            seen[old_index] = true;
+        }
+
+        // Build the inverse mapping:
+        // new_vertex_of_old_vertex[old_vertex] = new_vertex.
+        std::vector<vertex_id> new_vertex_of_old_vertex(vertex_count);
+
+        for (std::size_t new_vertex = 0U;
+             new_vertex < vertex_count;
+             ++new_vertex)
+        {
+            const auto old_vertex =
+                static_cast<std::size_t>(vertex_order[new_vertex]);
+
+            new_vertex_of_old_vertex[old_vertex] =
+                static_cast<vertex_id>(new_vertex);
+        }
+
+        std::vector<offset_type> new_row_offsets(vertex_count + 1U, 0U);
+        std::vector<vertex_id> new_column_indices;
+        new_column_indices.reserve(column_indices_.size());
+
+        std::vector<weight_type> new_edge_weights;
+
+        if (has_weights())
+        {
+            new_edge_weights.reserve(edge_weights_.size());
+        }
+
+        // Copy each old vertex's adjacency list into its new vertex position.
+        // Destination IDs are remapped into the new vertex numbering.
+        for (std::size_t new_vertex = 0U;
+             new_vertex < vertex_count;
+             ++new_vertex)
+        {
+            const auto old_vertex = vertex_order[new_vertex];
+
+            const auto old_vertex_index =
+                static_cast<std::size_t>(old_vertex);
+
+            const offset_type begin =
+                row_offsets_[old_vertex_index];
+
+            const offset_type end =
+                row_offsets_[old_vertex_index + 1U];
+
+            for (offset_type edge = begin;
+                 edge < end;
+                 ++edge)
+            {
+                const auto edge_index =
+                    static_cast<std::size_t>(edge);
+
+                const auto old_destination =
+                    static_cast<std::size_t>(
+                        column_indices_[edge_index]);
+
+                new_column_indices.push_back(
+                    new_vertex_of_old_vertex[old_destination]);
+
+                if (has_weights())
+                {
+                    new_edge_weights.push_back(
+                        edge_weights_[edge_index]);
+                }
+            }
+
+            new_row_offsets[new_vertex + 1U] =
+                static_cast<offset_type>(new_column_indices.size());
+        }
+
+        row_offsets_ = std::move(new_row_offsets);
+        column_indices_ = std::move(new_column_indices);
+        edge_weights_ = std::move(new_edge_weights);
+
+        validate();
+    }
 } // namespace hytgraph::graph

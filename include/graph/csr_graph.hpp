@@ -50,6 +50,11 @@ namespace hytgraph::graph
         // Throws std::invalid_argument when the representation is malformed.
         void validate() const;
 
+        // Reorder vertices and their adjacency lists according to
+        // vertex_order, where vertex_order[new_vertex] is the old vertex ID.
+        void reorder_vertices(
+            const std::vector<vertex_id> &vertex_order);
+
     private:
         offset_type num_vertices_ = 0;
 

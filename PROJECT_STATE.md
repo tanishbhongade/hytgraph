@@ -2,29 +2,30 @@
 
 ## Current Phase
 
-**Phase 8 — HyTM Cost Model**
+**Phase 9 — Task Combining**
 
 ## Current Milestone
 
-**M9 — HyTM Cost Model**
+**M10 — Task Combining**
 
 ## Current Task
 
-Phase 8 paper/code fidelity review completed. The HyTM Cost Model is complete at the CPU/reference-model level and has been locally validated. The project is ready for the next phase of the reproduction plan.
+Phase 9 Task Combining has been implemented, reviewed, and locally validated. The project is ready to stop at this point, with the next planned phase being Phase 10 — Hub Sorting.
 
 ## Status
 
 **COMPLETE**
 
-The HyTM Cost Model, including the paper-derived transfer costs, zero-copy RTT model, deterministic per-partition selector, and unit tests, has been implemented and locally validated. The implementation has been reviewed against the paper, the reproduction plan, and the existing transfer abstractions.
+The Task Combining layer now converts per-logical-partition HyTM engine selections into executable-task groups while preserving the paper-aligned distinction between consecutive Filter grouping and broader Compaction / Zero-Copy grouping.
 
 The implementation explicitly distinguishes:
 
-- paper-derived cost modeling
-- deterministic transfer-engine selection
+- paper-aligned task-combination behavior
+- executable-task metadata and metrics
+- deterministic task ordering
 - hardware/runtime-dependent execution
 
-No complete CUDA runtime reproduction or benchmark equivalence is claimed.
+No complete CUDA task-execution pipeline or benchmark equivalence is claimed.
 
 ---
 
@@ -153,7 +154,7 @@ and:
 
 as separate metrics.
 
-This is intentional. The Phase 8 cost model must combine them according to the paper's zero-copy cost equation.
+This is intentional. The Phase 8 cost model combines them according to the paper's zero-copy cost equation.
 
 ---
 
@@ -170,125 +171,9 @@ The following files were added or modified for Phase 7:
 
 # Phase 7 Validation
 
-The following project commands were run successfully by the repository owner:
+The Phase 7 implementation was previously validated by the repository owner.
 
-    cmake --build build -j
-    ctest --test-dir build --output-on-failure
-
-Result:
-
-    100% tests passed
-    0 tests failed
-    3 tests passed
-
-CUDA remained disabled for this validation environment.
-
-The Phase 7 tests cover:
-
-- active-vertex request accounting
-- active-edge accounting
-- request payload configuration
-- modeled TLP aggregation
-- alignment overhead
-- zero-degree active vertices
-- invalid option handling
-- invalid partition handling
-
----
-
-# Phase 7 Important Implementation Details
-
-## Request Payload
-
-Default modeled request payload:
-
-    128 bytes
-
-Configurable through:
-
-    ZeroCopyOptions::request_payload_bytes
-
-## Maximum Outstanding Requests
-
-Default:
-
-    256 requests per TLP
-
-Configurable through:
-
-    ZeroCopyOptions::max_requests_per_tlp
-
-## Alignment
-
-Default logical alignment:
-
-    128 bytes
-
-Configurable through:
-
-    ZeroCopyOptions::alignment_bytes
-
-The current implementation uses the CSR row offset multiplied by the destination-entry size as a **logical address proxy**.
-
-It does not claim this is the physical address of the mapped host allocation.
-
-## Mode
-
-The current result is explicitly:
-
-    ZeroCopyMode::Modeled
-
-and:
-
-    host_memory_mapped == false
-
-No actual CUDA host registration or mapped-memory allocation is performed.
-
----
-
-# Phase 7 Paper Fidelity
-
-The implementation is faithful to the paper at the intended reproduction/reference-model level.
-
-The paper describes ImpTM-zero-copy as mapping pinned CPU memory into the GPU address space so the GPU can directly access CPU-resident data.
-
-The reproduction currently models the resulting request behavior rather than implementing the complete CUDA mapped-memory lifecycle.
-
-The paper's zero-copy request model and RTT model are reserved for the Phase 8 cost model.
-
-The paper's engine-selection equations are also intentionally deferred to Phase 8.
-
----
-
-# Architecture
-
-Current reproduction architecture:
-
-    CSR Graph
-        |
-        v
-    Activity Tracking
-        |
-        v
-    Logical Partitioning
-        |
-        +--------------------+
-        |                    |
-        v                    v
-    ExpTM-Filter      ExpTM-Compaction
-        |                    |
-        |                    |
-        +---------+----------+
-                  |
-                  v
-           ImpTM-Zero-Copy
-                  |
-                  v
-          Phase 8 — HyTM Cost Model
-
-The transfer engines remain separate reference/modeling components.
-
-The HyTM Cost Model now consumes graph, activity, and logical-partition information and evaluates the three transfer strategies independently for each partition.
+The current project validation described below supersedes the older Phase 7-only validation state.
 
 ---
 
@@ -302,13 +187,13 @@ Implemented the HyTM cost model and deterministic transfer-engine selector descr
 
 The implementation remains scoped to the cost model and selector.
 
-Later scheduling/task-combining phases are not implemented.
+Later scheduling/task-combining phases are implemented separately.
 
 ---
 
-# Phase 8 Requirements
+## Phase 8 Requirements
 
-Implement:
+Implemented:
 
 - paper cost equations
 - `alpha = 0.80`
@@ -321,111 +206,13 @@ Implement:
 - deterministic per-partition engine selection
 - unit tests for synthetic partition cases
 
-The selector must implement the paper's decision structure:
+The selector implements the paper's strict comparison structure.
 
-    if T_eci < alpha * T_efi
-       and T_eci < beta * T_izi:
-           choose ExpTM-Compaction
-
-    else if T_izi < T_efi:
-           choose ImpTM-Zero-Copy
-
-    else:
-           choose ExpTM-Filter
-
-The comparisons must preserve the paper's strict `<` semantics.
+The cost model operates independently for each logical partition.
 
 ---
 
-# Phase 8 Cost Model
-
-The cost model should operate independently for each logical partition.
-
-## ExpTM-Filter
-
-Model the filter transfer cost using:
-
-    T_efi =
-    ceil(
-        transfer_bytes / m / MR
-    ) * RTT
-
-where:
-
-- `m` = request payload size
-- `MR` = maximum requests represented by a TLP
-- `RTT` = modeled round-trip time
-
-The partition's edge-data bytes are the reference transfer quantity.
-
----
-
-## ImpTM-Zero-Copy
-
-Per active vertex:
-
-    requests(v) =
-    ceil(Do(v) * d1 / m) + am(v)
-
-Then:
-
-    T_izi =
-    ceil(
-        sum(requests(v)) / MR
-    ) * RTT_zc
-
-The zero-copy RTT is:
-
-    RTT_zc =
-    gamma * RTT
-    +
-    (1 - gamma)
-    * active_edge_proportion
-    * RTT
-
-with:
-
-    gamma = 0.625
-
-and:
-
-    active_edge_proportion =
-    active_edges / total_edges
-
-for a partition with nonzero total edge count.
-
-The implementation must avoid division by zero for empty partitions.
-
----
-
-## ExpTM-Compaction
-
-Reference transfer bytes:
-
-    active_edge_bytes + active_vertex_index_bytes
-
-The transfer component is:
-
-    ceil(
-        compaction_bytes / m / MR
-    ) * RTT
-
-The CPU compaction component is:
-
-    compaction_bytes / T_hptcpt
-
-Therefore:
-
-    T_eci =
-    transfer_time
-    +
-    CPU_compaction_time
-
-The CPU compaction throughput must be configurable rather than inventing a paper-specific measured value that is not available in the current reproduction sources.
-
----
-
-# Phase 8 Implementation Status
+## Phase 8 Files
 
 The following files were added or modified for Phase 8:
 
@@ -434,102 +221,68 @@ The following files were added or modified for Phase 8:
     CMakeLists.txt
     tests/unit_tests.cpp
 
-The Phase 8 tests were integrated into the existing `tests/unit_tests.cpp` target. No separate Phase 8 test executable was introduced.
+---
 
-The implementation exposes:
+# Phase 9 — Task Combining
 
-- `HyTMCostModelOptions`
-- `HyTMPartitionMetrics`
-- `HyTMPartitionCosts`
-- `HyTMCostModel`
-- `TransferEngine`
-- per-partition evaluation
-- multi-partition evaluation
-- deterministic engine selection
+**Status:** COMPLETE
 
-The implementation validates model parameters and graph/partition/activity consistency and uses checked arithmetic for the byte/request calculations.
+## Objective
+
+Implemented the Task Combining layer that converts the HyTM engine decision for each logical partition into executable tasks.
+
+The implementation follows the reproduction plan's Phase 9 behavior:
+
+- ExpTM-Filter partitions are combined only when consecutive.
+- ExpTM-Filter groups contain at most `k` partitions.
+- Default Filter combination limit is `k = 4`.
+- ExpTM-Compaction partitions selected for the same engine are accumulated into one executable task.
+- ImpTM-Zero-Copy partitions selected for the same engine are accumulated into one executable task.
+- Final executable tasks are ordered deterministically by their first logical partition.
+- Executable tasks receive sequential `task_index` values after final ordering.
+- Task-combination metrics report logical partitions, executable tasks, and engine-specific combination counts.
+
+The membership vector:
+
+    partition_indices
+
+is authoritative for executable-task membership.
+
+For consecutive groups, `first_partition_index` / `end_partition_index` also describe the represented partition interval. For globally combined Compaction / Zero-Copy tasks, intervening partitions may belong to another engine, so the membership vector remains authoritative.
 
 ---
 
-# Phase 8 Important Distinction
+# Phase 9 Files
 
-The Phase 7 zero-copy implementation intentionally reports:
+The following files were added or modified for Phase 9:
 
-    memory_request_count
-    alignment_overhead_count
-
-separately.
-
-Phase 8 must use:
-
-    memory_request_count + alignment_overhead_count
-
-when evaluating the paper's zero-copy request equation.
-
-The aggregate TLP metric from Phase 7 is therefore not by itself sufficient for the Phase 8 zero-copy cost calculation.
+    include/scheduling/task_combiner.hpp
+    src/scheduling/task_combiner.cpp
+    CMakeLists.txt
+    tests/unit_tests.cpp
 
 ---
 
-# Phase 8 Configuration
+# Phase 9 Tests
 
-Expected model configuration should expose at least:
+The existing namespace-based `tests/unit_tests.cpp` test target was extended with TaskCombiner coverage for:
 
-    alpha = 0.80
-    beta  = 0.40
-    gamma = 0.625
+1. Filter grouping up to the configured `k`.
+2. Filter grouping only across consecutive Filter partitions.
+3. Compaction partition combination.
+4. Zero-Copy partition combination.
+5. Reduction from logical partitions to executable tasks.
+6. Empty input handling.
+7. Sequential executable-task indices.
 
-along with the transfer-model parameters required by the equations:
-
-    request payload size
-    maximum requests per TLP
-    RTT
-    CPU compaction throughput
-
-The default values must be clearly labeled as model/reference defaults where the paper does not provide a directly reproducible runtime measurement.
+The tests remain integrated into the existing `unit_tests` executable. No separate Phase 9 test executable was introduced.
 
 ---
 
-# Phase 8 Tests
-
-Tests should include deterministic synthetic cases covering:
-
-1. **Compaction selected**
-2. **Zero-copy selected**
-3. **Filter selected**
-4. Strict comparison boundaries
-5. Default alpha/beta/gamma values
-6. Zero-copy alignment overhead affecting the cost
-7. Empty / zero-edge partition handling
-8. Deterministic repeated selection
-9. Invalid cost-model configuration
-10. Per-partition independence
-
-The tests do not depend on CUDA hardware.
-
----
-
-# Phase 8 Scope Boundary
-
-Phase 8 must NOT implement:
-
-- four-filter-task grouping
-- task combination
-- CUDA kernel scheduling
-- GPU-side selector execution
-- Subway integration
-- full asynchronous CPU/GPU pipeline
-- benchmark reproduction
-- later evaluation phases
-
-Those belong to later phases of the reproduction plan.
-
----
-
-# Phase 8 Validation Result
+# Phase 9 Validation Result
 
 The repository owner ran:
 
-    cmake -S . -B build -DHYTGRAPH_ENABLE_CUDA=OFF
     cmake --build build -j
     ctest --test-dir build --output-on-failure
 
@@ -539,17 +292,106 @@ Build result:
 
 CTest result:
 
-    1/3 Test #1: unit_tests ....................... Passed
-    2/3 Test #2: algorithm_tests .................. Passed
-    3/3 Test #3: experiment_runner_smoke .......... Passed
+    1/4 Test #1: unit_tests ....................... Passed
+    2/4 Test #2: algorithm_tests .................. Passed
+    3/4 Test #3: cuda_algorithm_tests ............. Passed
+    4/4 Test #4: experiment_runner_smoke .......... Passed
 
-    100% tests passed, 0 tests failed out of 3
+    100% tests passed, 0 tests failed out of 4
 
-    Total Test time = 0.11 sec
+    Total Test time = 1.83 sec
 
-The three CTest entries are the project's registered test executables. The Phase 8 test cases themselves are integrated into `unit_tests`.
+The CUDA algorithm tests passed in this validation.
 
-CUDA was explicitly disabled for this validation. Therefore this result confirms the CPU/reference Phase 8 implementation, but does not constitute CUDA-enabled validation.
+This confirms the current build and test state supplied by the repository owner. No additional benchmark or performance claim is made.
+
+---
+
+# Phase 9 Important Implementation Details
+
+## Filter Combination
+
+Default:
+
+    filter_combine_k = 4
+
+A Filter run is grouped only with immediately consecutive Filter partitions.
+
+For example:
+
+    Filter
+    Filter
+    Compaction
+    Filter
+    Filter
+
+produces:
+
+    Filter {0, 1}
+    Compaction {2}
+    Filter {3, 4}
+
+Filter partitions are not combined across another engine selection.
+
+## Compaction Combination
+
+All logical partitions selected for ExpTM-Compaction are represented by one executable Compaction task.
+
+The partition membership vector preserves the original logical partition indices.
+
+## Zero-Copy Combination
+
+All logical partitions selected for ImpTM-Zero-Copy are represented by one executable Zero-Copy task.
+
+The partition membership vector preserves the original logical partition indices.
+
+## Task Ordering
+
+After engine-specific grouping, executable tasks are sorted by:
+
+    first_partition_index
+
+This restores deterministic logical-partition order.
+
+Sequential:
+
+    task_index
+
+values are assigned after this final ordering.
+
+---
+
+# Phase 9 Metrics
+
+`TaskCombinationMetrics` exposes:
+
+    logical_partition_count
+    executable_task_count
+    filter_partitions_combined
+    compaction_partitions_combined
+    zero_copy_partitions_combined
+
+The plan also exposes:
+
+    task_count_reduced()
+    task_count_reduction()
+
+The metrics describe logical-to-executable task reduction and do not claim measured runtime speedup.
+
+---
+
+# Phase 9 Paper Fidelity
+
+The implementation follows the reproduction plan's paper-aligned task-combination model:
+
+- small logical partitions remain available for fine-grained HyTM engine selection
+- Filter combines consecutive selected partitions with a maximum group size of four
+- Compaction combines partitions selected for the same engine
+- Zero-Copy combines partitions selected for the same engine
+
+The implementation stops at executable-task planning. It does not yet implement the full CUDA task execution, contribution-driven scheduling, neighbor-shifting pipeline, CUDA stream overlap, or complete SEP-Graph integration.
+
+Those later mechanisms remain future work.
 
 ---
 
@@ -569,67 +411,75 @@ Logical partitions currently serve as graph-analysis/reference abstractions.
 
 They are not yet connected to a complete runtime scheduler.
 
-## 3. Partition Target Size
-
-The current partition target accounts for the graph's modeled destination/edge storage.
-
-It does not claim to reproduce every runtime metadata allocation used by the original implementation.
-
-## 4. ExpTM-Filter
+## 3. ExpTM-Filter
 
 The current implementation is a reference transfer model rather than the complete CUDA transfer mechanism.
 
-## 5. ExpTM-Compaction
+## 4. ExpTM-Compaction
 
 The current implementation is CPU/reference compaction.
 
 It does not claim to reproduce the paper's complete asynchronous execution pipeline.
 
-## 6. Subway
+## 5. Subway
 
 The exact internal Subway implementation and scheduling behavior are not fully specified by the available sources.
 
 No unsupported implementation details are being invented.
 
-## 7. Physical Transfer Accounting
+## 6. Physical Transfer Accounting
 
 Current transfer sizes are logical/reference byte counts.
 
 They are not claimed to represent every physical PCIe transaction or runtime metadata transfer.
 
-## 8. CUDA Execution
+## 7. CUDA Execution
 
-The latest Phase 8 validation was run with CUDA explicitly disabled using `-DHYTGRAPH_ENABLE_CUDA=OFF`.
+The transfer-engine and task-combination layers remain reference/modeling components.
 
-The CPU/reference implementation is therefore the currently validated reproducibility layer.
+Passing CUDA algorithm tests does not mean the complete HyTGraph CUDA runtime has been reproduced.
 
-## 9. Zero-Copy Mapping
+## 8. Zero-Copy Mapping
 
 Phase 7 does not perform actual CUDA pinned host allocation, host registration, or mapped-memory pointer acquisition.
 
 The behavior is explicitly modeled.
 
-## 10. Zero-Copy Alignment
+## 9. Zero-Copy Alignment
 
 The zero-copy alignment calculation uses a logical CSR byte-offset proxy.
 
 It is not a physical host-memory address calculation.
 
-## 11. Zero-Copy TLP Metric
-
-Phase 7 reports base request count and alignment overhead separately.
-
-Phase 8 must combine them when applying the paper's zero-copy cost equation.
-
-## 12. Compaction Throughput
+## 10. Compaction Throughput
 
 A reproducible paper-specific CPU compaction throughput measurement is not currently available from the project sources.
 
 Phase 8 exposes throughput as a configurable model parameter rather than inventing a paper-specific measured value.
 
-## 13. No Benchmark Claims
+## 11. Task Combination
 
-No performance or benchmark equivalence to the original HyTGraph implementation is currently claimed. The Phase 8 result is a deterministic CPU/reference cost model and selector.
+The current TaskCombiner is an executable-task planning layer.
+
+It does not yet execute grouped tasks, overlap transfers and computation, or implement the paper's complete scheduling pipeline.
+
+## 12. Task Ordering for Globally Combined Engines
+
+Compaction and Zero-Copy groups may contain non-consecutive logical partition indices because they are accumulated by engine selection.
+
+`partition_indices` is therefore authoritative for those task memberships.
+
+## 13. CMake CUDA Architecture Default
+
+The build was adjusted so that when CUDA is enabled and no explicit architecture is supplied, CMake uses:
+
+    CMAKE_CUDA_ARCHITECTURES=native
+
+This is a build-configuration convenience to avoid guessing a GPU architecture. It is not a HyTGraph algorithmic behavior and does not claim paper fidelity.
+
+## 14. No Benchmark Claims
+
+No performance or benchmark equivalence to the original HyTGraph implementation is currently claimed.
 
 ---
 
@@ -671,17 +521,17 @@ Last confirmed project validation:
 
     100% tests passed
     0 tests failed
-    3 tests passed
+    4 tests passed
 
-CUDA:
+CUDA algorithm tests:
 
-    DISABLED
+    PASSED
 
 ---
 
 # Current Milestone
 
-    M9 — HyTM Cost Model
+    M10 — Task Combining
 
 Status:
 
@@ -691,16 +541,18 @@ Status:
 
 # Next Milestone
 
-    Next phase after M9 — HyTM Cost Model
+    M11 — Hub Sorting
 
 Status:
 
-    READY TO DETERMINE FROM MASTER_PLAN.md
+    READY
 
 ---
 
 # NEXT TASK
 
-**Next task:** Determine the single next task specified by `MASTER_PLAN.md` after Phase 8 — HyTM Cost Model.
+**Next task:** Phase 10 — Hub Sorting.
 
-Before implementation, inspect the relevant plan section, paper mechanism, and current repository state. Then provide only the first required file and wait for local validation.
+The project is intentionally stopped here for this handoff.
+
+Before implementation resumes, inspect the relevant Phase 10 section of `MASTER_PLAN.md`, the original paper mechanism, and the current repository state. Then provide only the first required file and wait for local validation.

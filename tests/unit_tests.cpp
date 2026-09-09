@@ -1,23 +1,24 @@
-#include "runtime/config.hpp"
-#include "runtime/result.hpp"
-
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <cmath>
+#include <stdexcept>
+
+#include "runtime/config.hpp"
+#include "runtime/result.hpp"
 
 #include "graph/csr_graph.hpp"
-#include <stdexcept>
 #include "graph/graph_loader.hpp"
-
 #include "graph/partition.hpp"
-#include "transfer/filter_engine.hpp"
 
+#include "transfer/filter_engine.hpp"
 #include "transfer/compaction_engine.hpp"
 #include "transfer/zero_copy_engine.hpp"
 #include "transfer/hytm_cost_model.hpp"
+
+#include "scheduling/task_combiner.hpp"
 
 namespace
 {
@@ -2142,6 +2143,206 @@ namespace
         }
     }
 
+    void test_task_combiner_filter_groups()
+    {
+        using hytgraph::scheduling::TaskCombiner;
+        using hytgraph::transfer::TransferEngine;
+
+        const std::vector<TransferEngine> engines = {
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMFilter};
+
+        TaskCombiner combiner;
+        const auto plan = combiner.combine(engines);
+
+        expect(
+            plan.metrics.logical_partition_count == 6U,
+            "task combiner records logical partition count");
+
+        expect(
+            plan.metrics.executable_task_count == 2U,
+            "six filter partitions become two executable tasks");
+
+        expect(
+            plan.metrics.filter_partitions_combined == 4U,
+            "filter combination count is four");
+
+        expect(
+            plan.tasks.size() == 2U,
+            "filter tasks are grouped into two tasks");
+
+        expect(
+            plan.tasks[0].partition_indices ==
+                std::vector<std::size_t>{0U, 1U, 2U, 3U},
+            "first filter task contains four consecutive partitions");
+
+        expect(
+            plan.tasks[1].partition_indices ==
+                std::vector<std::size_t>{4U, 5U},
+            "second filter task contains remaining consecutive partitions");
+    }
+
+    void test_task_combiner_filter_consecutive_only()
+    {
+        using hytgraph::scheduling::TaskCombiner;
+        using hytgraph::transfer::TransferEngine;
+
+        const std::vector<TransferEngine> engines = {
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMCompaction,
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMFilter};
+
+        TaskCombiner combiner;
+        const auto plan = combiner.combine(engines);
+
+        expect(
+            plan.tasks.size() == 3U,
+            "separate filter runs remain separate tasks");
+
+        expect(
+            plan.tasks[0].partition_indices ==
+                std::vector<std::size_t>{0U},
+            "first filter run is not combined across compaction");
+
+        expect(
+            plan.tasks[1].partition_indices ==
+                std::vector<std::size_t>{1U},
+            "compaction partition remains represented");
+
+        expect(
+            plan.tasks[2].partition_indices ==
+                std::vector<std::size_t>{2U, 3U},
+            "second consecutive filter run is combined");
+
+        expect(
+            plan.tasks[0].task_index == 0U &&
+                plan.tasks[1].task_index == 1U &&
+                plan.tasks[2].task_index == 2U,
+            "executable tasks receive sequential task indices");
+    }
+
+    void test_task_combiner_compaction()
+    {
+        using hytgraph::scheduling::TaskCombiner;
+        using hytgraph::transfer::TransferEngine;
+
+        const std::vector<TransferEngine> engines = {
+            TransferEngine::ExpTMCompaction,
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMCompaction,
+            TransferEngine::ImpTMZeroCopy,
+            TransferEngine::ExpTMCompaction};
+
+        TaskCombiner combiner;
+        const auto plan = combiner.combine(engines);
+
+        expect(
+            plan.metrics.compaction_partitions_combined == 3U,
+            "all compaction partitions are combined");
+
+        expect(
+            plan.tasks[0].engine ==
+                TransferEngine::ExpTMCompaction,
+            "compaction task retains compaction engine");
+
+        expect(
+            plan.tasks[0].partition_indices ==
+                std::vector<std::size_t>{0U, 2U, 4U},
+            "compaction task contains all selected partitions");
+    }
+
+    void test_task_combiner_zero_copy()
+    {
+        using hytgraph::scheduling::TaskCombiner;
+        using hytgraph::transfer::TransferEngine;
+
+        const std::vector<TransferEngine> engines = {
+            TransferEngine::ImpTMZeroCopy,
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ImpTMZeroCopy,
+            TransferEngine::ExpTMCompaction,
+            TransferEngine::ImpTMZeroCopy};
+
+        TaskCombiner combiner;
+        const auto plan = combiner.combine(engines);
+
+        expect(
+            plan.metrics.zero_copy_partitions_combined == 3U,
+            "all zero-copy partitions are combined");
+
+        expect(
+            plan.tasks[0].engine ==
+                TransferEngine::ImpTMZeroCopy,
+            "zero-copy task retains zero-copy engine");
+
+        expect(
+            plan.tasks[0].partition_indices ==
+                std::vector<std::size_t>{0U, 2U, 4U},
+            "zero-copy task contains all selected partitions");
+    }
+
+    void test_task_combiner_reduces_task_count()
+    {
+        using hytgraph::scheduling::TaskCombiner;
+        using hytgraph::transfer::TransferEngine;
+
+        const std::vector<TransferEngine> engines = {
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMCompaction,
+            TransferEngine::ImpTMZeroCopy,
+            TransferEngine::ExpTMFilter,
+            TransferEngine::ExpTMCompaction,
+            TransferEngine::ImpTMZeroCopy};
+
+        TaskCombiner combiner;
+        const auto plan = combiner.combine(engines);
+
+        expect(
+            plan.metrics.logical_partition_count == 7U,
+            "logical partition count is preserved");
+
+        expect(
+            plan.metrics.executable_task_count == 4U,
+            "executable task count is reduced");
+
+        expect(
+            plan.metrics.task_count_reduced(),
+            "task count reduction is reported");
+
+        expect(
+            plan.metrics.task_count_reduction() == 3U,
+            "task count reduction is three");
+    }
+
+    void test_task_combiner_empty_input()
+    {
+        using hytgraph::scheduling::TaskCombiner;
+        using hytgraph::transfer::TransferEngine;
+
+        TaskCombiner combiner;
+
+        const auto plan =
+            combiner.combine(std::vector<TransferEngine>{});
+
+        expect(
+            plan.tasks.empty(),
+            "empty engine selection produces no tasks");
+
+        expect(
+            plan.metrics.logical_partition_count == 0U,
+            "empty input has zero logical partitions");
+
+        expect(
+            plan.metrics.executable_task_count == 0U,
+            "empty input has zero executable tasks");
+    }
+
 } // namespace
 
 int main()
@@ -2190,6 +2391,13 @@ int main()
         test_hytm_cost_model();
         test_hytm_selector();
         test_hytm_invalid_options();
+
+        test_task_combiner_filter_groups();
+        test_task_combiner_filter_consecutive_only();
+        test_task_combiner_compaction();
+        test_task_combiner_zero_copy();
+        test_task_combiner_reduces_task_count();
+        test_task_combiner_empty_input();
 
         std::cout << "All Phase 0 unit tests passed.\n";
         return 0;

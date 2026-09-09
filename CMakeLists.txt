@@ -13,6 +13,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Use the host GPU architecture by default when CUDA is enabled.
+# Allow callers to override this with -DCMAKE_CUDA_ARCHITECTURES=...
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR
+   CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+    set(CMAKE_CUDA_ARCHITECTURES native)
+endif()
+
 option(HYTGRAPH_ENABLE_WARNINGS "Enable compiler warnings" ON)
 option(HYTGRAPH_BUILD_TESTS "Build CTest-based tests" ON)
 option(HYTGRAPH_ENABLE_CUDA "Build the CUDA target when nvcc is available" ON)
@@ -29,6 +36,7 @@ add_library(hytgraph_runtime
     src/transfer/compaction_engine.cpp
     src/transfer/zero_copy_engine.cpp
     src/transfer/hytm_cost_model.cpp
+    src/scheduling/task_combiner.cpp
 )
 
 target_include_directories(hytgraph_runtime PUBLIC

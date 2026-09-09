@@ -1,373 +1,654 @@
-# HyTGraph Reproduction Project — Current State
+# HyTGraph Reproduction — Project State
 
 ## Current Phase
 
-Phase 6 — ExpTM-Compaction
+**Phase 7 — ImpTM-Zero-Copy**
 
 ## Current Milestone
 
-M7 — ExpTM-Compaction
+**M8 — ImpTM-Zero-Copy**
 
 ## Current Task
 
-Implement and validate the Subway-style CPU ExpTM-Compaction reference baseline.
+Phase 7 paper/code fidelity review completed. ImpTM-Zero-Copy is complete at the reference/modeling level. The project is ready to begin Phase 8 — HyTM Cost Model.
 
 ## Status
 
-COMPLETE — reference CPU compaction baseline implemented and locally validated.
+**COMPLETE**
+
+ImpTM-Zero-Copy request-count and alignment modeling has been implemented and locally validated. The implementation has been reviewed against the paper and the reproduction plan.
+
+The implementation explicitly distinguishes:
+
+- modeled zero-copy behavior
+- alignment/request metrics
+- actual mapped host-memory execution
+
+No actual CUDA mapped/pinned-memory execution is claimed.
 
 ---
 
-# Implemented
+# Completed Phases
 
-## Phase 0 — Infrastructure
+## Phase 0 — Repository / Build Baseline
 
-Implemented:
+**Status:** COMPLETE
 
-- CMake/C++ project
-- CUDA target infrastructure
-- unit tests
-- logging
-- configuration
-- experiment runner
-- result schema
+Established the C++17 project structure, CMake build, test infrastructure, and CUDA-aware build layout.
 
-## Phase 1 — CSR Graph Infrastructure
+---
 
-Implemented:
+## Phase 1 — CSR Graph Foundation
 
-- CSR graph storage
-- graph loading
-- graph validation
-- degree queries
-- neighbor queries
+**Status:** COMPLETE
 
-## Phase 2 — Correctness Reference Algorithms
+Implemented the CSR graph representation and supporting graph-loading functionality.
 
-Implemented:
+---
 
-- CPU PageRank
-- CPU SSSP
-- GPU baseline PageRank infrastructure
-- GPU baseline SSSP infrastructure
-- GPU/CPU correctness tests
+## Phase 2 — Activity Tracking
 
-## Phase 3 — Activity Tracking
+**Status:** COMPLETE
 
-Implemented:
+Implemented active-vertex tracking and active-edge accounting.
 
-- active vertex tracking
-- active edge counting
-- activity statistics
+Active-edge semantics:
 
-## Phase 4 — Logical Partitioning
+> Every outgoing edge of an active source vertex is considered active.
 
-Implemented:
+---
 
-- logical graph partitions
-- configurable partition target
-- CSR-row-preserving partition boundaries
-- edge/storage accounting
+## Phase 3 — Logical Partitioning
 
-## Phase 5 — ExpTM-Filter
+**Status:** COMPLETE
 
-Implemented:
+Implemented logical graph partitions over contiguous vertex ranges while preserving CSR adjacency-list boundaries.
 
-- active partition detection
-- whole-partition transfer planning
-- inactive-partition skipping
-- transferred edge accounting
-- transferred byte accounting
-- separate filter/reference path
+Partitions expose:
+
+- vertex range
+- edge range
+- vertex count
+- edge count
+- target byte size
+- edge-data byte size
+
+---
+
+## Phase 4 — ExpTM-Filter
+
+**Status:** COMPLETE
+
+Implemented the reference ExpTM-Filter transfer path and associated transfer metrics.
+
+This is a reference/modeling implementation rather than the paper's complete CUDA execution pipeline.
+
+---
+
+## Phase 5 — Algorithm / Runtime Integration
+
+**Status:** COMPLETE
+
+Integrated the graph/activity/partition/transfer abstractions sufficiently for the current reproduction architecture and validation tests.
+
+---
 
 ## Phase 6 — ExpTM-Compaction
 
+**Status:** COMPLETE
+
+Implemented the CPU/reference ExpTM-Compaction path.
+
 Implemented:
 
-- Subway-style CPU/reference compaction baseline
-- active source-vertex extraction
-- compact neighbor payload
-- compressed neighbor index
-- inactive-source edge removal
-- zero-degree active vertex handling
-- all-active preservation path
-- compaction byte accounting
-- separate CPU compaction timing
-- correctness/reference expansion path
-- configurable enable/disable behavior
-- validation of activity/graph compatibility
-- validation of partition/CSR boundary consistency
+- active-edge compaction
+- compacted destination/index representation
+- transfer-size accounting
+- CPU-side compaction accounting
+- deterministic reference behavior
+- unit tests
+
+The implementation is a reference CPU path and does not claim the paper's full asynchronous GPU/CPU pipeline.
 
 ---
 
-# Files Changed
+## Phase 7 — ImpTM-Zero-Copy
 
-Phase 6 files:
+**Status:** COMPLETE
 
-- `include/transfer/compaction_engine.hpp`
-- `src/transfer/compaction_engine.cpp`
-- `CMakeLists.txt`
-- `tests/unit_tests.cpp`
+Implemented the ImpTM-Zero-Copy reference/modeling path.
+
+Implemented:
+
+- per-active-vertex zero-copy request counting
+- configurable request payload size
+- configurable maximum outstanding requests per TLP
+- alignment-overhead accounting
+- aggregate modeled TLP accounting
+- active vertex / active edge metrics
+- partition-level metrics
+- zero-copy preparation result
+- modeled fallback mode
+- validation of partition and CSR consistency
+- deterministic unit tests
+
+The implementation follows the paper's request-count structure:
+
+    ceil(Do(v) * d1 / m) + am(v)
+
+where:
+
+- `Do(v)` = vertex out-degree
+- `d1` = bytes per destination/neighbor entry
+- `m` = request payload size
+- `am(v)` = alignment overhead indicator
+
+The current implementation keeps:
+
+    memory_requests
+
+and:
+
+    alignment_overhead
+
+as separate metrics.
+
+This is intentional. The Phase 8 cost model must combine them according to the paper's zero-copy cost equation.
 
 ---
 
-# Interfaces Changed
+# Phase 7 Files
 
-Added the ExpTM-Compaction interface:
+The following files were added or modified for Phase 7:
 
-- `ExpTMCompaction`
-- `CompactedPartition`
-- `CompactionResult`
-
-Existing graph, activity, and logical-partition interfaces were preserved.
-
-No Phase 5 filter interface was removed or redesigned.
+    include/transfer/zero_copy_engine.hpp
+    src/transfer/zero_copy_engine.cpp
+    CMakeLists.txt
+    tests/unit_tests.cpp
 
 ---
 
-# Tests
+# Phase 7 Validation
 
-Phase 6 tests cover:
-
-- basic compaction
-- multiple active vertices
-- active/inactive partition behavior
-- zero-degree active vertices
-- all-active graph preservation
-- disabled/reference path
-- activity/graph size mismatch
-- invalid partition boundaries
-- compacted neighbor ordering
-- compressed index correctness
-- byte accounting
-- reference expansion
-
-Local validation reported by the project owner:
+The following project commands were run successfully by the repository owner:
 
     cmake --build build -j
     ctest --test-dir build --output-on-failure
 
-Reported result:
+Result:
 
-    100% tests passed, 0 tests failed out of 3
+    100% tests passed
+    0 tests failed
+    3 tests passed
 
-Tests reported as passing:
+CUDA remained disabled for this validation environment.
 
-- `unit_tests`
-- `algorithm_tests`
-- `experiment_runner_smoke`
+The Phase 7 tests cover:
 
-CUDA was disabled for this validation run.
-
-The assistant did not execute the build or tests.
-
----
-
-# Measurements
-
-Phase 6 records CPU-side compaction time separately from transfer execution.
-
-The compacted representation records:
-
-- active vertex count
-- active edge count
-- neighbor payload bytes
-- compressed-index bytes
-- total compacted bytes
-
-No physical PCIe/H2D bandwidth or GPU execution timing is claimed.
-
-No benchmark measurements have yet been collected.
+- active-vertex request accounting
+- active-edge accounting
+- request payload configuration
+- modeled TLP aggregation
+- alignment overhead
+- zero-degree active vertices
+- invalid option handling
+- invalid partition handling
 
 ---
 
-# Paper Features
+# Phase 7 Important Implementation Details
 
-- [x] CSR
-- [x] Partitioning
-- [ ] SEP-Graph / equivalent GPU kernel
-- [ ] Neighbor shifting
-- [x] ExpTM-Filter
-- [x] ExpTM-Compaction
-- [ ] ImpTM-Zero-Copy
-- [ ] HyTM
-- [ ] Task Combining
-- [ ] Hub Sorting
-- [ ] Contribution-Driven Scheduling
-- [ ] VCGC
-- [ ] Cache Refresh
-- [ ] Multi-stream execution
+## Request Payload
 
----
+Default modeled request payload:
 
-# Algorithms
+    128 bytes
 
-- [x] PageRank
-- [x] SSSP
-- [ ] BFS
-- [ ] Connected Components
+Configurable through:
 
----
+    ZeroCopyOptions::request_payload_bytes
 
-# Dependencies
+## Maximum Outstanding Requests
 
-Phase 6 uses:
+Default:
 
-- `CSRGraph`
-- `LogicalPartition`
-- `LogicalPartitioner`
-- `ActivityTracker`
-- Phase 5 logical/reference transfer semantics
+    256 requests per TLP
 
-Phase 6 does not yet integrate:
+Configurable through:
 
-- SEP-Graph
-- CUB
-- CUDA streams
-- neighbor shifting
-- HyTM
-- VCGC
-- ImpTM-Zero-Copy
-- task combining
-- contribution-driven scheduling
+    ZeroCopyOptions::max_requests_per_tlp
 
-These remain later project mechanisms.
+## Alignment
+
+Default logical alignment:
+
+    128 bytes
+
+Configurable through:
+
+    ZeroCopyOptions::alignment_bytes
+
+The current implementation uses the CSR row offset multiplied by the destination-entry size as a **logical address proxy**.
+
+It does not claim this is the physical address of the mapped host allocation.
+
+## Mode
+
+The current result is explicitly:
+
+    ZeroCopyMode::Modeled
+
+and:
+
+    host_memory_mapped == false
+
+No actual CUDA host registration or mapped-memory allocation is performed.
 
 ---
 
-# Known Issues
+# Phase 7 Paper Fidelity
 
-1. The exact original logical partition-boundary construction algorithm is not sufficiently specified in the supplied paper material.
+The implementation is faithful to the paper at the intended reproduction/reference-model level.
 
-2. Logical partitions remain a graph-analysis abstraction and are not yet connected to the later task scheduler or HyTM cost model.
+The paper describes ImpTM-zero-copy as mapping pinned CPU memory into the GPU address space so the GPU can directly access CPU-resident data.
 
-3. The partition target accounts for the CSR destination storage represented by the current partition abstraction rather than every possible runtime metadata structure.
+The reproduction currently models the resulting request behavior rather than implementing the complete CUDA mapped-memory lifecycle.
 
-4. ExpTM-Filter remains a reference transfer-planning implementation rather than actual HyTGraph-specific CUDA transfer execution.
+The paper's zero-copy request model and RTT model are reserved for the Phase 8 cost model.
 
-5. ExpTM-Compaction is currently a CPU/reference implementation rather than a complete asynchronous HyTGraph execution pipeline.
-
-6. The exact internal Subway implementation is not sufficiently specified to claim byte-for-byte reproduction.
-
-7. Transfer-byte measurements represent logical/reference payloads rather than physical measured PCIe/H2D traffic.
-
-8. No benchmark measurements have yet been collected.
+The paper's engine-selection equations are also intentionally deferred to Phase 8.
 
 ---
 
-# Paper Fidelity
+# Architecture
+
+Current reproduction architecture:
+
+    CSR Graph
+        |
+        v
+    Activity Tracking
+        |
+        v
+    Logical Partitioning
+        |
+        +--------------------+
+        |                    |
+        v                    v
+    ExpTM-Filter      ExpTM-Compaction
+        |                    |
+        |                    |
+        +---------+----------+
+                  |
+                  v
+           ImpTM-Zero-Copy
+                  |
+                  v
+          Phase 8 — HyTM Cost Model
+
+The transfer engines remain separate reference/modeling components.
+
+---
+
+# Phase 8 — HyTM Cost Model
+
+**Status:** NOT STARTED
+
+## Objective
+
+Implement the HyTM cost model and deterministic transfer-engine selector described in the paper.
+
+The implementation must remain scoped to the cost model and selector.
+
+Do not implement later scheduling/task-combining phases yet.
+
+---
+
+# Phase 8 Requirements
+
+Implement:
+
+- paper cost equations
+- `alpha = 0.80`
+- `beta = 0.40`
+- `gamma = 0.625`
+- zero-copy RTT model
+- filter cost
+- compaction cost
+- zero-copy cost
+- deterministic per-partition engine selection
+- unit tests for synthetic partition cases
+
+The selector must implement the paper's decision structure:
+
+    if T_eci < alpha * T_efi
+       and T_eci < beta * T_izi:
+           choose ExpTM-Compaction
+
+    else if T_izi < T_efi:
+           choose ImpTM-Zero-Copy
+
+    else:
+           choose ExpTM-Filter
+
+The comparisons must preserve the paper's strict `<` semantics.
+
+---
+
+# Phase 8 Cost Model
+
+The cost model should operate independently for each logical partition.
 
 ## ExpTM-Filter
 
-The reproduction follows the documented whole-partition filtering behavior:
+Model the filter transfer cost using:
 
-- logical partitions are the filtering granularity;
-- partitions containing active edges are selected;
-- partitions containing no active edges are skipped;
-- selected partitions are represented as complete logical-partition transfers;
-- active-edge compaction is not performed by ExpTM-Filter.
+    T_efi =
+    ceil(
+        transfer_bytes / m / MR
+    ) * RTT
+
+where:
+
+- `m` = request payload size
+- `MR` = maximum requests represented by a TLP
+- `RTT` = modeled round-trip time
+
+The partition's edge-data bytes are the reference transfer quantity.
+
+---
+
+## ImpTM-Zero-Copy
+
+Per active vertex:
+
+    requests(v) =
+    ceil(Do(v) * d1 / m) + am(v)
+
+Then:
+
+    T_izi =
+    ceil(
+        sum(requests(v)) / MR
+    ) * RTT_zc
+
+The zero-copy RTT is:
+
+    RTT_zc =
+    gamma * RTT
+    +
+    (1 - gamma)
+    * active_edge_proportion
+    * RTT
+
+with:
+
+    gamma = 0.625
+
+and:
+
+    active_edge_proportion =
+    active_edges / total_edges
+
+for a partition with nonzero total edge count.
+
+The implementation must avoid division by zero for empty partitions.
+
+---
 
 ## ExpTM-Compaction
 
-The Phase 6 implementation follows the project specification for:
+Reference transfer bytes:
 
-- CPU-assisted active-edge compaction;
-- contiguous compacted neighbor storage;
-- compressed neighbor/index representation;
-- separate compaction measurement;
-- correctness/reference behavior.
+    active_edge_bytes + active_vertex_index_bytes
 
-The implementation does not claim to reproduce undocumented internal details of the original HyTGraph/Subway runtime.
+The transfer component is:
 
-## Logical Partitioning
+    ceil(
+        compaction_bytes / m / MR
+    ) * RTT
 
-The reproduction uses:
+The CPU compaction component is:
 
-- CSR vertex-row boundaries;
-- configurable target-size balancing;
-- no splitting of individual CSR adjacency rows;
-- metadata-only logical partitions referencing the existing CSR graph.
+    compaction_bytes / T_hptcpt
 
----
+Therefore:
 
-# Engineering Approximations
+    T_eci =
+    transfer_time
+    +
+    CPU_compaction_time
 
-## Logical Partitioning
-
-The supplied paper material does not provide sufficient implementation detail to reconstruct the exact original partition-boundary construction algorithm.
-
-The reproduction therefore uses CSR-row-preserving logical partitions.
-
-## ExpTM-Compaction Representation
-
-The compacted representation:
-
-    active_vertices
-    neighbor_index
-    neighbors
-
-is an engineering/reference representation.
-
-It should not be interpreted as a confirmed byte-for-byte reconstruction of the original Subway internal representation.
-
-## Runtime Execution
-
-Phase 6 does not claim:
-
-- GPU-side compaction execution;
-- physical CUDA transfer timing;
-- CUDA-stream overlap;
-- SEP-Graph execution;
-- neighbor-shifting execution.
-
-Those mechanisms are separate project components.
+The CPU compaction throughput must be configurable rather than inventing a paper-specific measured value that is not available in the current reproduction sources.
 
 ---
 
-# Validation Status
+# Phase 8 Important Distinction
 
-The project owner reported successful local validation after Phase 6 implementation.
+The Phase 7 zero-copy implementation intentionally reports:
 
-Build:
+    memory_request_count
+    alignment_overhead_count
+
+separately.
+
+Phase 8 must use:
+
+    memory_request_count + alignment_overhead_count
+
+when evaluating the paper's zero-copy request equation.
+
+The aggregate TLP metric from Phase 7 is therefore not by itself sufficient for the Phase 8 zero-copy cost calculation.
+
+---
+
+# Phase 8 Configuration
+
+Expected model configuration should expose at least:
+
+    alpha = 0.80
+    beta  = 0.40
+    gamma = 0.625
+
+along with the transfer-model parameters required by the equations:
+
+    request payload size
+    maximum requests per TLP
+    RTT
+    CPU compaction throughput
+
+The default values must be clearly labeled as model/reference defaults where the paper does not provide a directly reproducible runtime measurement.
+
+---
+
+# Phase 8 Tests
+
+Tests should include deterministic synthetic cases covering:
+
+1. **Compaction selected**
+2. **Zero-copy selected**
+3. **Filter selected**
+4. Strict comparison boundaries
+5. Default alpha/beta/gamma values
+6. Zero-copy alignment overhead affecting the cost
+7. Empty / zero-edge partition handling
+8. Deterministic repeated selection
+9. Invalid cost-model configuration
+10. Per-partition independence
+
+The tests must not depend on CUDA hardware.
+
+---
+
+# Phase 8 Scope Boundary
+
+Phase 8 must NOT implement:
+
+- four-filter-task grouping
+- task combination
+- CUDA kernel scheduling
+- GPU-side selector execution
+- Subway integration
+- full asynchronous CPU/GPU pipeline
+- benchmark reproduction
+- later evaluation phases
+
+Those belong to later phases of the reproduction plan.
+
+---
+
+# Known Issues / Engineering Approximations
+
+The following are known and intentionally documented.
+
+## 1. Exact Original Partition Boundaries
+
+The paper does not provide enough information to reproduce every original runtime partition boundary exactly.
+
+The project therefore uses deterministic logical partitions.
+
+## 2. Logical Partitioning
+
+Logical partitions currently serve as graph-analysis/reference abstractions.
+
+They are not yet connected to a complete runtime scheduler.
+
+## 3. Partition Target Size
+
+The current partition target accounts for the graph's modeled destination/edge storage.
+
+It does not claim to reproduce every runtime metadata allocation used by the original implementation.
+
+## 4. ExpTM-Filter
+
+The current implementation is a reference transfer model rather than the complete CUDA transfer mechanism.
+
+## 5. ExpTM-Compaction
+
+The current implementation is CPU/reference compaction.
+
+It does not claim to reproduce the paper's complete asynchronous execution pipeline.
+
+## 6. Subway
+
+The exact internal Subway implementation and scheduling behavior are not fully specified by the available sources.
+
+No unsupported implementation details are being invented.
+
+## 7. Physical Transfer Accounting
+
+Current transfer sizes are logical/reference byte counts.
+
+They are not claimed to represent every physical PCIe transaction or runtime metadata transfer.
+
+## 8. CUDA Execution
+
+The current validation environment has CUDA disabled.
+
+The CPU/reference implementation is therefore the primary reproducibility layer.
+
+## 9. Zero-Copy Mapping
+
+Phase 7 does not perform actual CUDA pinned host allocation, host registration, or mapped-memory pointer acquisition.
+
+The behavior is explicitly modeled.
+
+## 10. Zero-Copy Alignment
+
+The zero-copy alignment calculation uses a logical CSR byte-offset proxy.
+
+It is not a physical host-memory address calculation.
+
+## 11. Zero-Copy TLP Metric
+
+Phase 7 reports base request count and alignment overhead separately.
+
+Phase 8 must combine them when applying the paper's zero-copy cost equation.
+
+## 12. Compaction Throughput
+
+A reproducible paper-specific CPU compaction throughput measurement is not currently available from the project sources.
+
+Phase 8 should therefore expose throughput as a configurable model parameter.
+
+## 13. No Benchmark Claims
+
+No performance or benchmark equivalence to the original HyTGraph implementation is currently claimed.
+
+---
+
+# Validation Policy
+
+For every new phase:
+
+1. Implement one file.
+2. Provide the complete copy-pasteable file.
+3. Do not modify unrelated architecture.
+4. User adds the file locally.
+5. User builds/tests locally.
+6. Review any failures.
+7. Continue to the next file only after validation.
+
+Do not claim local execution unless the user provides the result.
+
+---
+
+# Repository Safety Rule
+
+The repository is **read-only from the assistant's perspective**.
+
+Do not write, modify, delete, or generate files directly inside the repository.
+
+All implementation files must be provided as copy-pasteable content for the user to add manually.
+
+---
+
+# Current Validation Status
+
+Last confirmed project validation:
 
     cmake --build build -j
-
-CTest:
+    PASS
 
     ctest --test-dir build --output-on-failure
+    PASS
 
-Reported:
+    100% tests passed
+    0 tests failed
+    3 tests passed
 
-    100% tests passed, 0 tests failed out of 3
+CUDA:
 
-The assistant did not execute these commands.
-
----
-
-# Current Boundary
-
-Phase 6 — ExpTM-Compaction is complete at the reference CPU-baseline level.
-
-The architecture now progresses:
-
-    CSR
-      ↓
-    Activity Tracking
-      ↓
-    Logical Partitioning
-      ↓
-    ExpTM-Filter
-      ↓
-    ExpTM-Compaction
-      ↓
-    Phase 7 — ImpTM-Zero-Copy
-
-Phase 7 should remain separate from Phase 6.
-
-Do not introduce HyTM, task combining, VCGC, or multi-stream execution prematurely.
+    DISABLED
 
 ---
 
-# Next Task
+# Current Milestone
 
-Phase 7 — ImpTM-Zero-Copy
+    M8 — ImpTM-Zero-Copy
+
+Status:
+
+    COMPLETE
+
+---
+
+# Next Milestone
+
+    M9 — HyTM Cost Model
+
+Status:
+
+    READY TO START
+
+---
+
+# NEXT TASK
+
+**Phase 8 — HyTM Cost Model**
+
+First implementation step:
+
+    Create include/transfer/hytm_cost_model.hpp
+
+Provide the header only first. Do not implement the `.cpp`, CMake changes, or tests until the header has been added and validated locally.

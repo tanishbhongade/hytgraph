@@ -15,6 +15,7 @@
 #include "transfer/filter_engine.hpp"
 
 #include "transfer/compaction_engine.hpp"
+#include "transfer/zero_copy_engine.hpp"
 
 namespace
 {
@@ -1558,6 +1559,376 @@ namespace
             threw,
             "compaction rejects partition with inconsistent CSR boundary");
     }
+    void test_zero_copy_empty_activity()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ImpTMZeroCopy;
+        using hytgraph::transfer::ZeroCopyMode;
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 4},
+            {1, 2, 2, 0});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+
+        ImpTMZeroCopy zero_copy;
+
+        const auto result =
+            zero_copy.prepare(graph, partitions, activity);
+
+        expect(result.mode == ZeroCopyMode::Modeled,
+               "zero-copy reference path is modeled");
+
+        expect(!result.host_memory_mapped,
+               "modeled path does not claim host memory mapping");
+
+        expect(result.active_partition_count == 0,
+               "no active partitions for empty activity");
+
+        expect(result.active_vertex_count == 0,
+               "no active vertices for empty activity");
+
+        expect(result.active_edge_count == 0,
+               "no active edges for empty activity");
+
+        expect(result.memory_request_count == 0,
+               "no memory requests for empty activity");
+
+        expect(result.alignment_overhead_count == 0,
+               "no alignment overhead for empty activity");
+
+        expect(result.modeled_tlp_count == 0,
+               "no modeled TLPs for empty activity");
+    }
+
+    void test_zero_copy_active_vertices()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ImpTMZeroCopy;
+        using hytgraph::transfer::ZeroCopyMode;
+
+        // Graph:
+        //
+        // 0 -> 1, 2
+        // 1 -> 2
+        // 2 -> 0
+        // 3 -> nothing
+        //
+        // Vertices 0 and 2 are active.
+        //
+        // Vertex 0:
+        //   degree = 2
+        //   neighbor payload = 2 * sizeof(vertex_id) = 8 bytes
+        //   requests = ceil(8 / 128) = 1
+        //
+        // Vertex 2:
+        //   degree = 1
+        //   neighbor payload = 4 bytes
+        //   requests = ceil(4 / 128) = 1
+        //
+        // Total:
+        //   active vertices = 2
+        //   active edges = 3
+        //   memory requests = 2
+        //   alignment overhead = 1
+        //   modeled TLPs = ceil(2 / 256) = 1
+
+        CSRGraph graph(
+            4,
+            {0, 2, 3, 4, 4},
+            {1, 2, 2, 0});
+
+        LogicalPartitioner partitioner(
+            2U * sizeof(CSRGraph::vertex_id));
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+        activity.set_active_vertices({0, 2});
+
+        ImpTMZeroCopy zero_copy;
+
+        const auto result =
+            zero_copy.prepare(graph, partitions, activity);
+
+        expect(result.mode == ZeroCopyMode::Modeled,
+               "active zero-copy path remains modeled");
+
+        expect(result.active_vertex_count == 2,
+               "active vertex count");
+
+        expect(result.active_edge_count == 3,
+               "active edge count");
+
+        expect(result.memory_request_count == 2,
+               "memory request count");
+
+        expect(result.alignment_overhead_count == 1,
+               "unaligned logical CSR offset contributes alignment overhead");
+
+        expect(result.modeled_tlp_count == 1,
+               "two memory requests fit within one modeled TLP");
+
+        expect(result.active_partition_count >= 1,
+               "active vertices produce an active partition");
+
+        std::size_t active_vertices_seen = 0;
+
+        for (const auto &partition : result.partitions)
+        {
+            expect(partition.active_vertices.size() ==
+                       partition.vertex_metrics.size(),
+                   "active vertices and metrics have matching sizes");
+
+            active_vertices_seen +=
+                partition.active_vertices.size();
+
+            for (const auto &metrics : partition.vertex_metrics)
+            {
+                expect(metrics.memory_requests >= 1,
+                       "non-empty active adjacency has at least one request");
+
+                expect(metrics.alignment_overhead <= 1,
+                       "alignment overhead is binary");
+            }
+        }
+
+        expect(active_vertices_seen == 2,
+               "all active vertices appear exactly once");
+    }
+
+    void test_zero_copy_request_payload_configuration()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ImpTMZeroCopy;
+        using hytgraph::transfer::ZeroCopyOptions;
+
+        CSRGraph graph(
+            2,
+            {0, 40, 40},
+            std::vector<CSRGraph::vertex_id>(
+                40,
+                1));
+
+        LogicalPartitioner partitioner(
+            1024U);
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+        activity.set_active(0);
+
+        ZeroCopyOptions options;
+        options.request_payload_bytes = 16U;
+        options.max_requests_per_tlp = 2U;
+
+        ImpTMZeroCopy zero_copy(options);
+
+        const auto result =
+            zero_copy.prepare(graph, partitions, activity);
+
+        // 40 vertex IDs * 4 bytes = 160 bytes.
+        // With a 16-byte request payload:
+        //
+        //   ceil(160 / 16) = 10 requests
+        //
+        // With two requests per modeled TLP:
+        //
+        //   ceil(10 / 2) = 5 TLPs.
+        expect(result.memory_request_count == 10,
+               "configured request payload changes request count");
+
+        expect(result.modeled_tlp_count == 5,
+               "configured request concurrency changes TLP count");
+    }
+
+    void test_zero_copy_invalid_options()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ImpTMZeroCopy;
+        using hytgraph::transfer::ZeroCopyOptions;
+
+        CSRGraph graph(
+            1,
+            {0, 0},
+            {});
+
+        LogicalPartitioner partitioner(1024U);
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+
+        {
+            ZeroCopyOptions options;
+            options.request_payload_bytes = 0U;
+
+            ImpTMZeroCopy zero_copy(options);
+
+            bool threw = false;
+
+            try
+            {
+                (void)zero_copy.prepare(
+                    graph,
+                    partitions,
+                    activity);
+            }
+            catch (const std::invalid_argument &)
+            {
+                threw = true;
+            }
+
+            expect(threw,
+                   "zero-copy rejects zero request payload");
+        }
+
+        {
+            ZeroCopyOptions options;
+            options.max_requests_per_tlp = 0U;
+
+            ImpTMZeroCopy zero_copy(options);
+
+            bool threw = false;
+
+            try
+            {
+                (void)zero_copy.prepare(
+                    graph,
+                    partitions,
+                    activity);
+            }
+            catch (const std::invalid_argument &)
+            {
+                threw = true;
+            }
+
+            expect(threw,
+                   "zero-copy rejects zero requests per TLP");
+        }
+
+        {
+            ZeroCopyOptions options;
+            options.alignment_bytes = 0U;
+
+            ImpTMZeroCopy zero_copy(options);
+
+            bool threw = false;
+
+            try
+            {
+                (void)zero_copy.prepare(
+                    graph,
+                    partitions,
+                    activity);
+            }
+            catch (const std::invalid_argument &)
+            {
+                threw = true;
+            }
+
+            expect(threw,
+                   "zero-copy rejects zero alignment size");
+        }
+    }
+
+    void test_zero_copy_partition_validation()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartition;
+        using hytgraph::transfer::ImpTMZeroCopy;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 2, 2},
+            {1, 2});
+
+        ActivityTracker activity(graph.num_vertices());
+        activity.set_active(0);
+
+        // Deliberately omit vertex 2 from the supplied partition coverage.
+        std::vector<LogicalPartition> invalid_partitions{
+            LogicalPartition(
+                0,
+                2,
+                0,
+                2,
+                2U * sizeof(CSRGraph::vertex_id))};
+
+        ImpTMZeroCopy zero_copy;
+
+        bool threw = false;
+
+        try
+        {
+            (void)zero_copy.prepare(
+                graph,
+                invalid_partitions,
+                activity);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "zero-copy rejects incomplete logical partition coverage");
+    }
+
+    void test_zero_copy_zero_degree_active_vertex()
+    {
+        using hytgraph::graph::ActivityTracker;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::graph::LogicalPartitioner;
+        using hytgraph::transfer::ImpTMZeroCopy;
+
+        CSRGraph graph(
+            3,
+            {0, 1, 1, 1},
+            {1});
+
+        LogicalPartitioner partitioner(1024U);
+
+        const auto partitions = partitioner.partition(graph);
+
+        ActivityTracker activity(graph.num_vertices());
+        activity.set_active(1);
+
+        ImpTMZeroCopy zero_copy;
+
+        const auto result =
+            zero_copy.prepare(graph, partitions, activity);
+
+        expect(result.active_vertex_count == 1,
+               "zero-degree vertex remains an active vertex");
+
+        expect(result.active_edge_count == 0,
+               "zero-degree active vertex has no active edges");
+
+        expect(result.memory_request_count == 0,
+               "zero-degree active vertex has no neighbor requests");
+
+        expect(result.alignment_overhead_count == 0,
+               "zero-degree active vertex has no alignment overhead");
+
+        expect(result.modeled_tlp_count == 0,
+               "zero-degree active vertex requires no modeled TLP");
+    }
 } // namespace
 
 int main()
@@ -1595,6 +1966,13 @@ int main()
         test_exp_tm_compaction_disabled_reference_path();
         test_exp_tm_compaction_rejects_mismatched_activity();
         test_exp_tm_compaction_rejects_invalid_partition();
+
+        test_zero_copy_empty_activity();
+        test_zero_copy_active_vertices();
+        test_zero_copy_request_payload_configuration();
+        test_zero_copy_invalid_options();
+        test_zero_copy_partition_validation();
+        test_zero_copy_zero_degree_active_vertex();
 
         std::cout << "All Phase 0 unit tests passed.\n";
         return 0;

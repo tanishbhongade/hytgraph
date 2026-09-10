@@ -90,6 +90,8 @@ Task Combining
    ↓
 Contribution-Driven Scheduling
    ↓
+SEP-Graph execution layer
+   ↓
 GPU computation
    ↓
 Vertex-Centric Graph Caching
@@ -103,13 +105,13 @@ Next iteration
 
 These must not be forgotten.
 
-| Dependency | Requirement |
-|---|---|
-| **SEP-Graph** | HyTGraph uses SEP-Graph's processing kernel as the GPU computation reference; neighbor shifting is enabled for ExpTM-Filter and ExpTM-Compaction. |
-| **Subway** | CPU active-edge compaction follows the Subway design and regenerates a compressed neighbor/index representation. |
-| **CUB** | Paper implementation uses CUB for sorting, TopK, and compaction where applicable. |
-| **CUDA streams** | Multiple streams overlap GPU computation, transfers, and CPU compaction. |
-| **Neighbor shifting** | Must be considered when implementing the explicit-transfer engines. |
+| Dependency            | Requirement                                                                                                                                                                                                                                  |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **SEP-Graph**         | HyTGraph uses a SEP-Graph-derived GPU execution framework; the reproduction integrates the relevant SEP execution abstractions and variants internally, with neighbor shifting enabled for ExpTM-Filter and ExpTM-Compaction where required. |
+| **Subway**            | CPU active-edge compaction follows the Subway design and regenerates a compressed neighbor/index representation.                                                                                                                             |
+| **CUB**               | Paper implementation uses CUB for sorting, TopK, and compaction where applicable.                                                                                                                                                            |
+| **CUDA streams**      | Multiple streams overlap GPU computation, transfers, and CPU compaction.                                                                                                                                                                     |
+| **Neighbor shifting** | Must be considered when implementing the explicit-transfer engines.                                                                                                                                                                          |
 
 If an exact dependency cannot be integrated, implement the closest defensible equivalent and label it explicitly as an **engineering approximation**.
 
@@ -291,17 +293,75 @@ Implement:
 
 **Exit criterion:** correctness is preserved and scheduling impact is measurable.
 
-## Phase 12 — VCGC
+## Phase 12 — SEP-Graph foundation
+
+Bring the SEP-Graph execution model into the project without coupling it to the HyTGraph transfer pipeline yet.
+
+Implement:
+
+- SEP execution abstractions for Sync/Async, Push/Pull, and Data-/Topology-Driven modes
+- application-facing execution interface needed by PageRank and SSSP
+- variant enumeration and execution-policy representation
+- project-local SEP-derived/common execution types rather than requiring the legacy SEP repository as a separate runtime dependency
+- a clean boundary between graph data management and GPU execution
+- correctness/reference hooks for every execution mode that will later be used asynchronously
+
+Do **not** integrate HyTM, partitioned transfers, VCGC, or multi-stream overlap in this phase.
+
+**Exit criterion:** the project can represent and dispatch SEP execution variants through a stable internal interface, with unit tests for variant selection/configuration and no HyTGraph transfer dependency.
+
+## Phase 13 — SEP GPU execution
+
+Implement the actual SEP-backed GPU computation path for the primary algorithms.
+
+Implement:
+
+- SEP-derived GPU execution for PageRank
+- SEP-derived GPU execution for SSSP
+- required Sync/Async and Push/Pull/DD/TD variants used by the algorithms
+- execution-policy selection hooks based on workload statistics
+- GPU correctness checks against the existing CPU/reference implementations
+- execution metrics needed by later HyTM/scheduling integration
+
+Keep the existing GPU baseline path intact as a reference.
+
+**Exit criterion:** PageRank and SSSP execute correctly through the SEP-backed path, variant execution is testable, and the baseline/reference path remains available.
+
+## Phase 14 — HyTGraph ↔ SEP integration
+
+Connect the SEP GPU execution layer to the existing HyTGraph data-movement and scheduling components.
+
+Integrate:
+
+- ActivityTracker state with SEP worklists/execution state
+- logical partitions with SEP execution granularity
+- ExpTM-Filter with SEP-backed GPU execution
+- ExpTM-Compaction with SEP-backed GPU execution
+- ImpTM-Zero-Copy with SEP-backed GPU execution where supported
+- neighbor shifting for explicit-transfer paths where required
+- HyTM policy decisions with SEP execution-policy decisions
+- Task Combining with SEP task/worklist execution
+- Contribution-Driven Scheduling with SEP worklists/priorities
+
+The integration must preserve the existing CPU/reference transfer paths and correctness checks.
+
+**Exit criterion:** an out-of-core iteration can execute through HyTM-selected transfer strategies and SEP-backed GPU computation while producing results equivalent to the reference path.
+
+## Phase 15 — VCGC
+
+Implement vertex-centric graph caching on top of the integrated execution path.
 
 Implement:
 
 - one-byte hotness target
-- top-K under cache capacity
+- access-frequency tracking
+- top-K selection under cache capacity
 - cache hit/miss accounting
+- cache-enabled and cache-disabled execution paths
 
-**Exit criterion:** cache correctness and candidate selection pass.
+**Exit criterion:** cache correctness, candidate selection, and hit/miss accounting pass independently of cache refresh.
 
-## Phase 13 — VCGC refresh
+## Phase 16 — VCGC refresh
 
 Implement:
 
@@ -309,45 +369,55 @@ Implement:
 - replacement threshold = 30%
 - eviction/compaction
 - loading new candidates during normal computation where possible
+- refresh-overhead accounting
 
-**Exit criterion:** refresh is correct and overhead is measured.
+**Exit criterion:** refresh is correct, independently disableable, and its overhead is measurable.
 
-## Phase 14 — Multi-stream runtime
+## Phase 17 — Multi-stream runtime
 
 Implement:
 
 - overlap transfers, CPU compaction, and GPU computation
 - paper-aligned task priority
+- stream-aware task execution
 - profiling of actual overlap
+- correctness comparison against the single-stream/reference path
 
-**Exit criterion:** asynchronous execution is correct and measurable.
+**Exit criterion:** asynchronous multi-stream execution is correct and measured; overlap is demonstrated with profiling rather than inferred from stream count.
 
-## Phase 15 — Full HyTGraph
+## Phase 18 — Full HyTGraph integration
 
-Integrate:
+Integrate the complete pipeline:
 
+- SEP-backed GPU execution
 - HyTM
+- ExpTM-Filter
+- ExpTM-Compaction
+- ImpTM-Zero-Copy
 - Task Combining
 - Contribution-Driven Scheduling
 - VCGC
+- VCGC refresh
 - multi-stream runtime
 
-Preserve independent feature switches.
+Preserve independent feature switches and reference paths for ablation.
 
-**Exit criterion:** full system runs end-to-end.
+**Exit criterion:** the full system runs end-to-end on supported out-of-core workloads with correctness checks and per-feature metrics.
 
-## Phase 16 — Evaluation
+## Phase 19 — Evaluation
 
 Implement:
 
 - internal ablations
 - paper baselines where feasible
+- SEP/baseline execution comparison
 - transfer analysis
 - cache analysis
+- scheduling analysis
 - sensitivity experiments
-- final plots
+- final plots and report-ready tables
 
-**Exit criterion:** reproducible result directory and report-ready tables/figures.
+**Exit criterion:** reproducible result directory and report-ready tables/figures covering the major paper evaluation questions.
 
 ---
 
@@ -441,6 +511,7 @@ H(v) = Do(v) * Di(v) / (Do_max * Di_max)
 - Prioritize partitions/vertices by contribution or delta.
 - Keep synchronous execution as the correctness reference.
 - Measure stale/redundant work and scheduling overhead.
+- Integrate priorities with the SEP worklist/execution layer after Phase 13.
 - Do not assume asynchronous execution is automatically faster.
 
 ---
@@ -490,7 +561,9 @@ Requirements:
 
 # 13. Runtime and CUDA execution
 
-- Use multiple CUDA streams after single-stream correctness is established.
+- Establish the SEP-backed single-stream execution path before enabling overlap.
+- Keep the existing GPU baseline/reference path available for correctness comparison.
+- Use multiple CUDA streams only after single-stream SEP/HyTGraph correctness is established.
 - Overlap CPU compaction, host/device transfers, and GPU computation.
 - Follow paper-aligned task-priority behavior where practical.
 - Use profiling to verify actual overlap.
@@ -601,14 +674,14 @@ Record:
 
 # 17. Metrics
 
-| Area | Metrics |
-|---|---|
-| Runtime | total, computation, transfer, compaction, scheduling, cache-management |
-| Communication | bytes transferred, active edges, remote accesses, reduction % |
-| HyTM | filter/compaction/zero-copy selections |
-| Scheduling | logical partitions, executable tasks, overhead, redundant/stale work |
-| VCGC | hits, misses, hit rate, refresh count, cache size, management time |
-| Correctness | result comparison, convergence/iteration behavior |
+| Area          | Metrics                                                                |
+| ------------- | ---------------------------------------------------------------------- |
+| Runtime       | total, computation, transfer, compaction, scheduling, cache-management |
+| Communication | bytes transferred, active edges, remote accesses, reduction %          |
+| HyTM          | filter/compaction/zero-copy selections                                 |
+| Scheduling    | logical partitions, executable tasks, overhead, redundant/stale work   |
+| VCGC          | hits, misses, hit rate, refresh count, cache size, management time     |
+| Correctness   | result comparison, convergence/iteration behavior                      |
 
 ---
 
@@ -690,6 +763,7 @@ Test:
 - active-edge calculations
 - cost-model equations
 - engine-selection branches
+- SEP execution variant representation/selection
 - task combination
 - hub scoring and ordering
 - hotness updates
@@ -703,6 +777,7 @@ Test:
 - CPU vs GPU PageRank
 - CPU vs GPU SSSP
 - equivalent results across transfer engines
+- equivalent results across SEP execution variants where applicable
 - HyTM selection on known activity patterns
 - cache-enabled vs cache-disabled correctness
 - synchronous vs asynchronous correctness
@@ -711,43 +786,45 @@ Test:
 
 # 21. Acceptance criteria
 
-| Category | Acceptance |
-|---|---|
-| Correctness | Implemented algorithms agree with reference within documented tolerance. |
-| HyTM | All three transfer mechanisms work and selector decisions are testable. |
-| Task combining | Task count decreases without changing logical partition decisions. |
-| CDS | Contribution prioritization works without breaking correctness. |
-| VCGC | Cache hit/miss, candidate selection and refresh are correct. |
-| Behavior | Engine selection and communication trends qualitatively match the paper where expected. |
-| Evaluation | Major paper evaluation questions can be reproduced. |
-| Performance | Project approaches the 60–70% target where hardware allows meaningful comparison. |
-| Scientific honesty | Every deviation/approximation is documented. |
+| Category           | Acceptance                                                                                           |
+| ------------------ | ---------------------------------------------------------------------------------------------------- |
+| Correctness        | Implemented algorithms agree with reference within documented tolerance.                             |
+| SEP execution      | SEP-backed PageRank/SSSP execution is correct and independently testable against the reference path. |
+| HyTM               | All three transfer mechanisms work and selector decisions are testable.                              |
+| Task combining     | Task count decreases without changing logical partition decisions.                                   |
+| CDS                | Contribution prioritization works without breaking correctness.                                      |
+| VCGC               | Cache hit/miss, candidate selection and refresh are correct.                                         |
+| Behavior           | Engine selection and communication trends qualitatively match the paper where expected.              |
+| Evaluation         | Major paper evaluation questions can be reproduced.                                                  |
+| Performance        | Project approaches the 60–70% target where hardware allows meaningful comparison.                    |
+| Scientific honesty | Every deviation/approximation is documented.                                                         |
 
 ---
 
 # 22. Milestones
 
-| Milestone | Deliverable | Status |
-|---|---|---|
-| M0 | Repository/build/test infrastructure | NOT STARTED |
-| M1 | CSR | NOT STARTED |
-| M2 | CPU references | NOT STARTED |
-| M3 | GPU baselines | NOT STARTED |
-| M4 | Activity tracking | NOT STARTED |
-| M5 | Partitioning | NOT STARTED |
-| M6 | ExpTM-Filter | NOT STARTED |
-| M7 | ExpTM-Compaction | NOT STARTED |
-| M8 | ImpTM-Zero-Copy | NOT STARTED |
-| M9 | HyTM | NOT STARTED |
-| M10 | Task Combining | NOT STARTED |
-| M11 | Hub Sorting | NOT STARTED |
-| M12 | Contribution Scheduling | NOT STARTED |
-| M13 | VCGC | NOT STARTED |
-| M14 | Multi-stream runtime | NOT STARTED |
-| M15 | Baselines | NOT STARTED |
-| M16 | Ablations | NOT STARTED |
-| M17 | Final evaluation | NOT STARTED |
-| M18 | Report | NOT STARTED |
+| Milestone | Deliverable                          | Status      |
+| --------- | ------------------------------------ | ----------- |
+| M0        | Repository/build/test infrastructure | NOT STARTED |
+| M1        | CSR                                  | NOT STARTED |
+| M2        | CPU references                       | NOT STARTED |
+| M3        | GPU baselines                        | NOT STARTED |
+| M4        | Activity tracking                    | NOT STARTED |
+| M5        | Partitioning                         | NOT STARTED |
+| M6        | ExpTM-Filter                         | NOT STARTED |
+| M7        | ExpTM-Compaction                     | NOT STARTED |
+| M8        | ImpTM-Zero-Copy                      | NOT STARTED |
+| M9        | HyTM                                 | NOT STARTED |
+| M10       | Task Combining                       | NOT STARTED |
+| M11       | Hub Sorting                          | NOT STARTED |
+| M12       | SEP-Graph foundation                 | IN PROGRESS |
+| M13       | SEP GPU execution                    | NOT STARTED |
+| M14       | HyTGraph ↔ SEP integration           | NOT STARTED |
+| M15       | VCGC                                 | NOT STARTED |
+| M16       | VCGC refresh                         | NOT STARTED |
+| M17       | Multi-stream runtime                 | NOT STARTED |
+| M18       | Full HyTGraph integration            | NOT STARTED |
+| M19       | Evaluation                           | NOT STARTED |
 
 ---
 
@@ -779,7 +856,7 @@ MEASUREMENTS:
 PAPER FEATURES:
 - [ ] CSR
 - [ ] Partitioning
-- [ ] SEP-Graph/equivalent GPU kernel
+- [ ] SEP-Graph execution layer
 - [ ] Neighbor shifting
 - [ ] ExpTM-Filter
 - [ ] ExpTM-Compaction

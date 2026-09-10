@@ -37,7 +37,10 @@ add_library(hytgraph_runtime
     src/transfer/zero_copy_engine.cpp
     src/transfer/hytm_cost_model.cpp
     src/scheduling/task_combiner.cpp
+    src/scheduling/contribution_scheduler.cpp
     src/scheduling/hub_sort.cpp
+    src/algorithms/pagerank.cpp
+    src/algorithms/sssp.cpp
 )
 
 target_include_directories(hytgraph_runtime PUBLIC

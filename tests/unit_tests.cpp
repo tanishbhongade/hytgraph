@@ -5,6 +5,7 @@
 #include <string>
 #include <cmath>
 #include <stdexcept>
+#include <limits>
 
 #include "runtime/config.hpp"
 #include "runtime/result.hpp"
@@ -20,6 +21,10 @@
 
 #include "scheduling/task_combiner.hpp"
 #include "scheduling/hub_sort.hpp"
+#include "scheduling/contribution_scheduler.hpp"
+
+#include "algorithms/pagerank.hpp"
+#include "algorithms/sssp.hpp"
 
 namespace
 {
@@ -2627,6 +2632,563 @@ namespace
         graph.validate();
     }
 
+    void test_contribution_scheduler_orders_by_contribution()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+
+        const std::vector<ContributionPriority> priorities = {
+            {0U, 0.10},
+            {1U, 0.90},
+            {2U, 0.30},
+            {3U, 0.70}};
+
+        ContributionScheduler scheduler;
+
+        const auto plan = scheduler.schedule(priorities);
+
+        expect(
+            plan.ordered_item_indices ==
+                std::vector<std::size_t>{1U, 3U, 2U, 0U},
+            "contribution scheduler orders larger contributions first");
+
+        expect(
+            plan.size() == priorities.size(),
+            "scheduler returns every input item");
+
+        expect(
+            plan.metrics.input_item_count == priorities.size(),
+            "scheduler records input item count");
+
+        expect(
+            plan.metrics.scheduled_item_count == priorities.size(),
+            "scheduler records scheduled item count");
+
+        expect(
+            plan.metrics.scheduling_overhead > 0.0,
+            "scheduled contribution work reports positive reference overhead");
+
+        expect(
+            std::fabs(
+                plan.metrics.scheduling_overhead - 2.0) < 1.0e-12,
+            "scheduled contribution work reports reference overhead");
+    }
+
+    void test_contribution_scheduler_deterministic_ties()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+
+        const std::vector<ContributionPriority> priorities = {
+            {3U, 0.50},
+            {1U, 0.50},
+            {2U, 0.90},
+            {0U, 0.50}};
+
+        ContributionScheduler scheduler;
+
+        const auto plan = scheduler.schedule(priorities);
+
+        expect(
+            plan.ordered_item_indices ==
+                std::vector<std::size_t>{2U, 0U, 1U, 3U},
+            "equal contributions use deterministic item-index ordering");
+    }
+
+    void test_contribution_scheduler_zero_contribution_metric()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+        using hytgraph::scheduling::ContributionSchedulerOptions;
+
+        ContributionSchedulerOptions options;
+        options.zero_contribution_epsilon = 1.0e-6;
+
+        ContributionScheduler scheduler(options);
+
+        const std::vector<ContributionPriority> priorities = {
+            {0U, 0.0},
+            {1U, 1.0e-8},
+            {2U, 0.25},
+            {3U, -1.0e-8}};
+
+        const auto plan = scheduler.schedule(priorities);
+
+        expect(
+            plan.metrics.zero_contribution_count == 3U,
+            "near-zero contributions are counted using configured epsilon");
+
+        expect(
+            plan.ordered_item_indices ==
+                std::vector<std::size_t>{2U, 1U, 0U, 3U},
+            "zero-contribution accounting does not change priority ordering");
+    }
+
+    void test_contribution_scheduler_reordering_metric()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+
+        const std::vector<ContributionPriority> priorities = {
+            {0U, 0.10},
+            {1U, 0.90},
+            {2U, 0.30}};
+
+        ContributionScheduler scheduler;
+
+        const auto plan = scheduler.schedule(priorities);
+
+        expect(
+            plan.metrics.reordered_item_count == 3U,
+            "scheduler reports items whose positions changed");
+    }
+
+    void test_contribution_scheduler_synchronous_reference()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+
+        const std::vector<ContributionPriority> priorities = {
+            {5U, 0.10},
+            {2U, 0.90},
+            {8U, 0.30}};
+
+        const auto plan =
+            ContributionScheduler::synchronous_reference(priorities);
+
+        expect(
+            plan.ordered_item_indices ==
+                std::vector<std::size_t>{5U, 2U, 8U},
+            "synchronous reference preserves supplied work order");
+
+        expect(
+            plan.metrics.input_item_count == priorities.size(),
+            "synchronous reference records input count");
+
+        expect(
+            plan.metrics.scheduled_item_count == priorities.size(),
+            "synchronous reference schedules every item");
+    }
+
+    void test_pagerank_contribution_representation()
+    {
+        using hytgraph::algorithms::PageRankContribution;
+
+        const PageRankContribution contribution{
+            7U,
+            0.125};
+
+        expect(
+            contribution.vertex == 7U,
+            "PageRank contribution preserves vertex index");
+
+        expect(
+            contribution.contribution == 0.125,
+            "PageRank contribution preserves contribution value");
+    }
+
+    void test_sssp_contribution_representation()
+    {
+        using hytgraph::algorithms::SSSPContribution;
+
+        const SSSPContribution contribution{
+            11U,
+            4.5};
+
+        expect(
+            contribution.vertex == 11U,
+            "SSSP contribution preserves vertex index");
+
+        expect(
+            contribution.contribution == 4.5,
+            "SSSP contribution preserves contribution value");
+    }
+    void test_pagerank_contributions()
+    {
+        using hytgraph::algorithms::pagerank_contributions;
+        using hytgraph::algorithms::PageRankOptions;
+        using hytgraph::graph::CSRGraph;
+
+        // 0 -> {1, 2}, 1 -> 2.
+        const CSRGraph graph(
+            3U,
+            std::vector<CSRGraph::offset_type>{0U, 2U, 3U, 3U},
+            std::vector<CSRGraph::vertex_id>{1U, 2U, 2U},
+            std::vector<float>{1.0F, 1.0F, 1.0F});
+
+        const std::vector<float> current_ranks = {
+            1.0F,
+            0.0F,
+            0.0F};
+
+        PageRankOptions options;
+        options.damping_factor = 0.85F;
+
+        const auto contributions =
+            pagerank_contributions(graph, current_ranks, options);
+
+        expect(contributions.size() == 3U,
+               "PageRank contribution count matches vertex count");
+
+        expect(contributions[0].vertex == 0U &&
+                   contributions[1].vertex == 1U &&
+                   contributions[2].vertex == 2U,
+               "PageRank contributions preserve vertex identity");
+
+        expect(std::fabs(contributions[0].contribution - 0.95) < 1.0e-5,
+               "PageRank contribution for vertex 0 matches delta");
+
+        expect(std::fabs(contributions[1].contribution - 0.475) < 1.0e-5,
+               "PageRank contribution for vertex 1 matches delta");
+
+        expect(std::fabs(contributions[2].contribution - 0.475) < 1.0e-5,
+               "PageRank contribution for vertex 2 matches delta");
+    }
+
+    void test_sssp_contributions()
+    {
+        using hytgraph::algorithms::sssp_contributions;
+
+        const std::vector<float> current_distances = {
+            0.0F,
+            5.0F,
+            std::numeric_limits<float>::infinity(),
+            10.0F};
+
+        const std::vector<float> candidate_distances = {
+            0.0F,
+            3.0F,
+            7.0F,
+            12.0F};
+
+        const auto contributions =
+            sssp_contributions(
+                current_distances,
+                candidate_distances);
+
+        expect(contributions.size() == 4U,
+               "SSSP contribution count matches distance vector size");
+
+        expect(contributions[0].vertex == 0U &&
+                   contributions[1].vertex == 1U &&
+                   contributions[2].vertex == 2U &&
+                   contributions[3].vertex == 3U,
+               "SSSP contributions preserve vertex identity");
+
+        expect(std::fabs(contributions[0].contribution - 0.0) < 1.0e-6,
+               "unchanged SSSP distance has zero contribution");
+
+        expect(std::fabs(contributions[1].contribution - 2.0) < 1.0e-6,
+               "SSSP distance improvement becomes contribution");
+
+        expect(std::fabs(contributions[2].contribution - 1.0) < 1.0e-6,
+               "newly reachable SSSP vertex receives useful-work priority");
+
+        expect(std::fabs(contributions[3].contribution - 0.0) < 1.0e-6,
+               "SSSP distance increase has zero contribution");
+    }
+
+    void test_contribution_scheduler_redundant_work_metric()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+
+        const std::vector<ContributionPriority> priorities = {
+            {0U, 0.90},
+            {1U, 0.70},
+            {1U, 0.50},
+            {2U, 0.30},
+            {2U, 0.20},
+            {2U, 0.10}};
+
+        const auto metrics =
+            ContributionScheduler::measure_work_metrics(priorities);
+
+        expect(metrics.input_item_count == 6U,
+               "work metrics record input count");
+
+        expect(metrics.scheduled_item_count == 6U,
+               "work metrics record scheduled count");
+
+        expect(metrics.redundant_work_count == 3U,
+               "duplicate work requests are counted as redundant work");
+
+        expect(metrics.zero_contribution_count == 0U,
+               "non-zero contributions are not counted as zero work");
+    }
+    void test_contribution_scheduler_stale_work_metric()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+        using hytgraph::scheduling::ContributionWorkObservation;
+
+        const std::vector<ContributionPriority> priorities = {
+            {0U, 0.90},
+            {1U, 0.70},
+            {2U, 0.30}};
+
+        const std::vector<ContributionWorkObservation> observations = {
+            {0U, false},
+            {1U, true},
+            {2U, true}};
+
+        const auto metrics =
+            ContributionScheduler::measure_work_metrics(
+                priorities,
+                observations);
+
+        expect(metrics.input_item_count == 3U,
+               "stale-work metrics preserve input count");
+
+        expect(metrics.stale_work_count == 2U,
+               "stale observations are counted");
+
+        expect(metrics.redundant_work_count == 0U,
+               "distinct stale observations are not redundant work");
+    }
+
+    void test_make_contribution_priorities()
+    {
+        using hytgraph::scheduling::make_contribution_priorities;
+
+        const std::vector<std::size_t> item_indices = {
+            4U, 1U, 7U};
+
+        const std::vector<double> contributions = {
+            0.25, 0.90, 0.50};
+
+        const auto priorities =
+            make_contribution_priorities(
+                item_indices,
+                contributions);
+
+        expect(priorities.size() == 3U,
+               "contribution priority adapter preserves item count");
+
+        expect(priorities[0].item_index == 4U &&
+                   priorities[1].item_index == 1U &&
+                   priorities[2].item_index == 7U,
+               "contribution priority adapter preserves item indices");
+
+        expect(std::fabs(priorities[0].contribution - 0.25) < 1.0e-12 &&
+                   std::fabs(priorities[1].contribution - 0.90) < 1.0e-12 &&
+                   std::fabs(priorities[2].contribution - 0.50) < 1.0e-12,
+               "contribution priority adapter preserves contribution values");
+    }
+
+    void test_make_contribution_priorities_rejects_mismatched_sizes()
+    {
+        using hytgraph::scheduling::make_contribution_priorities;
+
+        bool threw = false;
+
+        try
+        {
+            (void)make_contribution_priorities(
+                std::vector<std::size_t>{0U, 1U},
+                std::vector<double>{0.5});
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "contribution priority adapter rejects mismatched sizes");
+    }
+
+    void test_pagerank_contributions_feed_scheduler()
+    {
+        using hytgraph::algorithms::pagerank_contributions;
+        using hytgraph::algorithms::PageRankOptions;
+        using hytgraph::graph::CSRGraph;
+        using hytgraph::scheduling::ContributionScheduler;
+        using hytgraph::scheduling::make_contribution_priorities;
+
+        // 0 -> {1, 2}, 1 -> 2.
+        const CSRGraph graph(
+            3U,
+            std::vector<CSRGraph::offset_type>{0U, 2U, 3U, 3U},
+            std::vector<CSRGraph::vertex_id>{1U, 2U, 2U},
+            std::vector<float>{1.0F, 1.0F, 1.0F});
+
+        const std::vector<float> current_ranks = {
+            1.0F,
+            0.0F,
+            0.0F};
+
+        PageRankOptions options;
+        options.damping_factor = 0.85F;
+
+        const auto contributions =
+            pagerank_contributions(
+                graph,
+                current_ranks,
+                options);
+
+        std::vector<std::size_t> item_indices;
+        std::vector<double> contribution_values;
+
+        item_indices.reserve(contributions.size());
+        contribution_values.reserve(contributions.size());
+
+        for (const auto &contribution : contributions)
+        {
+            item_indices.push_back(contribution.vertex);
+            contribution_values.push_back(contribution.contribution);
+        }
+
+        const auto priorities =
+            make_contribution_priorities(
+                item_indices,
+                contribution_values);
+
+        ContributionScheduler scheduler;
+        const auto plan = scheduler.schedule(priorities);
+
+        expect(plan.ordered_item_indices.size() == 3U,
+               "PageRank scheduler returns every vertex");
+
+        expect(plan.ordered_item_indices[0] == 0U &&
+                   plan.ordered_item_indices[1] == 1U &&
+                   plan.ordered_item_indices[2] == 2U,
+               "PageRank scheduler prioritizes largest deltas first");
+    }
+
+    void test_sssp_contributions_feed_scheduler()
+    {
+        using hytgraph::algorithms::sssp_contributions;
+        using hytgraph::scheduling::ContributionScheduler;
+        using hytgraph::scheduling::make_contribution_priorities;
+
+        const std::vector<float> current_distances = {
+            0.0F,
+            10.0F,
+            8.0F,
+            std::numeric_limits<float>::infinity()};
+
+        const std::vector<float> candidate_distances = {
+            0.0F,
+            4.0F,
+            7.0F,
+            3.0F};
+
+        const auto contributions =
+            sssp_contributions(
+                current_distances,
+                candidate_distances);
+
+        std::vector<std::size_t> item_indices;
+        std::vector<double> contribution_values;
+
+        item_indices.reserve(contributions.size());
+        contribution_values.reserve(contributions.size());
+
+        for (const auto &contribution : contributions)
+        {
+            item_indices.push_back(contribution.vertex);
+            contribution_values.push_back(contribution.contribution);
+        }
+
+        const auto priorities =
+            make_contribution_priorities(
+                item_indices,
+                contribution_values);
+
+        ContributionScheduler scheduler;
+        const auto plan = scheduler.schedule(priorities);
+
+        expect(plan.ordered_item_indices.size() == 4U,
+               "SSSP scheduler returns every vertex");
+
+        expect(plan.ordered_item_indices[0] == 1U &&
+                   plan.ordered_item_indices[1] == 2U &&
+                   plan.ordered_item_indices[2] == 3U &&
+                   plan.ordered_item_indices[3] == 0U,
+               "SSSP scheduler prioritizes largest useful improvements first");
+    }
+
+    void test_contribution_scheduler_overhead_estimate()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+
+        const std::vector<ContributionPriority> empty_priorities;
+
+        expect(
+            ContributionScheduler::estimate_scheduling_overhead(
+                empty_priorities) == 0.0,
+            "empty scheduling workload has zero estimated overhead");
+
+        const std::vector<ContributionPriority> priorities = {
+            {0U, 0.10},
+            {1U, 0.90},
+            {2U, 0.30},
+            {3U, 0.70}};
+
+        const double overhead =
+            ContributionScheduler::estimate_scheduling_overhead(
+                priorities);
+
+        expect(
+            std::fabs(overhead - 2.0) < 1.0e-12,
+            "reference scheduling overhead follows log2 item-count model");
+    }
+
+    void test_contribution_scheduler_rejects_nan()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+
+        const std::vector<ContributionPriority> priorities = {
+            {0U, 0.5},
+            {1U, std::numeric_limits<double>::quiet_NaN()}};
+
+        ContributionScheduler scheduler;
+
+        bool threw = false;
+
+        try
+        {
+            (void)scheduler.schedule(priorities);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+
+        expect(threw,
+               "scheduler rejects non-finite contribution values");
+    }
+
+    void test_contribution_scheduler_reordered_accessor()
+    {
+        using hytgraph::scheduling::ContributionPriority;
+        using hytgraph::scheduling::ContributionScheduler;
+
+        const std::vector<ContributionPriority> ordered = {
+            {0U, 0.90},
+            {1U, 0.70},
+            {2U, 0.30}};
+
+        const auto ordered_plan =
+            ContributionScheduler().schedule(ordered);
+
+        expect(!ordered_plan.reordered(),
+               "reordered accessor reports unchanged work order");
+
+        const std::vector<ContributionPriority> reordered = {
+            {0U, 0.30},
+            {1U, 0.90},
+            {2U, 0.70}};
+
+        const auto reordered_plan =
+            ContributionScheduler().schedule(reordered);
+
+        expect(reordered_plan.reordered(),
+               "reordered accessor reports changed work order");
+    }
+
 } // namespace
 
 int main()
@@ -2692,6 +3254,25 @@ int main()
         test_csr_graph_reorder_preserves_weights();
         test_csr_graph_reorder_rejects_invalid_order();
         test_hub_sort_reorders_csr();
+
+        test_contribution_scheduler_orders_by_contribution();
+        test_contribution_scheduler_deterministic_ties();
+        test_contribution_scheduler_zero_contribution_metric();
+        test_contribution_scheduler_reordering_metric();
+        test_contribution_scheduler_synchronous_reference();
+        test_pagerank_contribution_representation();
+        test_sssp_contribution_representation();
+        test_pagerank_contributions();
+        test_sssp_contributions();
+        test_contribution_scheduler_redundant_work_metric();
+        test_contribution_scheduler_stale_work_metric();
+        test_make_contribution_priorities();
+        test_make_contribution_priorities_rejects_mismatched_sizes();
+        test_pagerank_contributions_feed_scheduler();
+        test_sssp_contributions_feed_scheduler();
+        test_contribution_scheduler_overhead_estimate();
+        test_contribution_scheduler_rejects_nan();
+        test_contribution_scheduler_reordered_accessor();
 
         std::cout << "All Phase 0 unit tests passed.\n";
         return 0;

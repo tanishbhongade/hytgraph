@@ -233,4 +233,60 @@ namespace hytgraph::algorithms
         return result;
     }
 
+    std::vector<SSSPContribution> sssp_contributions(
+        const std::vector<float> &current_distances,
+        const std::vector<float> &candidate_distances,
+        float tolerance)
+    {
+        if (!(tolerance >= 0.0F) || !std::isfinite(tolerance))
+        {
+            throw std::invalid_argument(
+                "SSSP contribution tolerance must be finite and non-negative");
+        }
+
+        if (current_distances.size() != candidate_distances.size())
+        {
+            throw std::invalid_argument(
+                "SSSP contribution distance vectors must have equal size");
+        }
+
+        std::vector<SSSPContribution> contributions;
+        contributions.reserve(current_distances.size());
+
+        for (std::size_t vertex = 0U;
+             vertex < current_distances.size();
+             ++vertex)
+        {
+            const float current = current_distances[vertex];
+            const float candidate = candidate_distances[vertex];
+
+            double contribution = 0.0;
+
+            if (std::isfinite(current) && std::isfinite(candidate))
+            {
+                const float improvement = current - candidate;
+
+                if (improvement > tolerance)
+                {
+                    contribution =
+                        static_cast<double>(improvement);
+                }
+            }
+            else if (!std::isfinite(current) &&
+                     std::isfinite(candidate))
+            {
+                // A previously unreachable vertex becoming reachable is
+                // treated as useful work. There is no finite numeric
+                // distance difference in this case, so use unit priority.
+                contribution = 1.0;
+            }
+
+            contributions.push_back(SSSPContribution{
+                vertex,
+                contribution});
+        }
+
+        return contributions;
+    }
+
 } // namespace hytgraph::algorithms

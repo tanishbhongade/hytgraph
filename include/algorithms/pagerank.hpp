@@ -15,6 +15,18 @@ namespace hytgraph::algorithms
         std::size_t max_iterations = 100;
     };
 
+    struct PageRankContribution
+    {
+        // Vertex receiving the contribution.
+        std::size_t vertex = 0U;
+
+        // PageRank contribution/delta associated with the vertex.
+        //
+        // Larger absolute contributions are candidates for earlier
+        // contribution-driven scheduling.
+        double contribution = 0.0;
+    };
+
     struct PageRankResult
     {
         std::vector<float> ranks;
@@ -25,6 +37,12 @@ namespace hytgraph::algorithms
 
     PageRankResult pagerank_cpu(
         const graph::CSRGraph &graph,
+        const PageRankOptions &options = {});
+
+    [[nodiscard]] std::vector<PageRankContribution>
+    pagerank_contributions(
+        const graph::CSRGraph &graph,
+        const std::vector<float> &current_ranks,
         const PageRankOptions &options = {});
 
     // GPU baseline using the same synchronous update semantics as pagerank_cpu.

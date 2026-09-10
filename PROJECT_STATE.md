@@ -2,34 +2,40 @@
 
 ## Current Phase
 
-**Phase 10 — Hub Sorting**
+**Phase 11 — Contribution-Driven Scheduling**
 
 ## Current Milestone
 
-**M11 — Hub Sorting**
+**M12 — Contribution-Driven Scheduling**
 
 ## Current Task
 
-Phase 10 Hub Sorting has been implemented, reviewed, integrated with CSR vertex reordering, and locally validated. The project is ready to stop at this point, with the next planned phase being Phase 11 — Contribution-Driven Scheduling.
+Phase 11 Contribution-Driven Scheduling has been implemented, reviewed, integrated with the CPU/reference algorithm layers, and locally validated. The project is ready to stop at this point, with the next planned phase being Phase 12 — SEP-Graph Foundation.
 
 ## Status
 
 **COMPLETE**
 
-The Hub Sorting layer now computes paper-aligned hub importance scores, selects approximately the configured top fraction of vertices as hubs, produces a deterministic hub-first vertex ordering, and supports preparation-time CSR vertex reordering using that ordering.
+The Contribution-Driven Scheduling layer now provides a deterministic reference scheduling abstraction that orders logical work items by supplied contribution/delta priority while preserving the synchronous execution path as the correctness reference.
 
 The implementation explicitly distinguishes:
 
-- paper-aligned hub importance scoring
-- approximate top-8% hub selection
-- deterministic hub-first ordering
-- natural ordering of non-hub vertices
-- preparation-time CSR vertex reordering
-- destination-vertex ID remapping
-- preservation of edge weights
-- hardware/runtime-dependent scheduling behavior
+- PageRank contribution/delta generation
+- SSSP contribution generation from tentative-distance improvements
+- contribution-prioritized work ordering
+- deterministic tie breaking
+- synchronous reference ordering
+- reordered-work measurement
+- zero-contribution measurement
+- redundant-work measurement
+- explicitly observed stale-work measurement
+- reference scheduling-overhead estimation
+- validation of non-finite contribution values
+- PageRank-to-scheduler integration
+- SSSP-to-scheduler integration
+- algorithm-specific contribution generation versus generic scheduling
 
-No complete contribution-driven scheduling pipeline or benchmark equivalence is claimed.
+No asynchronous execution speedup, GPU scheduling equivalence, or complete paper-runtime scheduling equivalence is claimed.
 
 ---
 
@@ -590,6 +596,373 @@ The current phase therefore provides the hub ordering foundation required by the
 
 ---
 
+# Phase 11 — Contribution-Driven Scheduling
+
+**Status:** COMPLETE
+
+## Objective
+
+Implemented the CPU/reference Contribution-Driven Scheduling layer described by the reproduction plan.
+
+The implementation provides a generic scheduling abstraction that orders already-identified logical work items by supplied contribution/delta values.
+
+The scheduler does not compute algorithm-specific contributions itself. PageRank and SSSP provide algorithm-specific contribution records, while the generic scheduler consumes those values.
+
+The synchronous execution path remains available as the correctness/reference path.
+
+---
+
+## Phase 11 Requirements
+
+Implemented:
+
+- generic contribution-priority representation
+- PageRank contribution/delta generation
+- SSSP contribution generation
+- contribution-driven priority ordering
+- deterministic contribution tie breaking
+- synchronous reference ordering
+- reordered-work measurement
+- zero-contribution measurement
+- redundant-work measurement
+- explicitly observed stale-work measurement
+- reference scheduling-overhead estimation
+- validation of finite contribution values
+- contribution-priority construction helper
+- PageRank → scheduler integration
+- SSSP → scheduler integration
+
+The scheduler prioritizes larger supplied contribution values first.
+
+For deterministic ties, lower `item_index` values are ordered first.
+
+The implementation does not claim that asynchronous contribution-driven scheduling is automatically faster.
+
+---
+
+## PageRank Contributions
+
+The Phase 11 PageRank layer provides:
+
+    PageRankContribution
+
+with:
+
+    vertex
+    contribution
+
+The contribution is derived from the absolute difference between the synchronous next PageRank value and the current rank:
+
+    contribution = |next_rank - current_rank|
+
+The calculation uses the existing CPU PageRank update semantics, including:
+
+- damping factor
+- incoming contributions
+- dangling mass
+- uniform base contribution
+
+This provides a reference delta signal for contribution-driven scheduling without changing the synchronous PageRank algorithm.
+
+---
+
+## SSSP Contributions
+
+The Phase 11 SSSP layer provides:
+
+    SSSPContribution
+
+with:
+
+    vertex
+    contribution
+
+The contribution is supplied from tentative-distance changes.
+
+For finite distances:
+
+    contribution = current_distance - candidate_distance
+
+when the candidate represents an improvement greater than the configured tolerance.
+
+Distance increases and unchanged distances produce zero contribution.
+
+For:
+
+    infinity -> finite
+
+the implementation assigns a unit useful-work priority because a finite numeric distance difference cannot be computed from infinity.
+
+This is an engineering scheduling abstraction rather than a claim that the paper specifies this exact SSSP contribution equation.
+
+---
+
+## Contribution Scheduler
+
+The generic scheduler provides:
+
+    ContributionPriority
+
+containing:
+
+    item_index
+    contribution
+
+The scheduler produces:
+
+    ContributionSchedulingPlan
+
+containing:
+
+    ordered_item_indices
+    metrics
+
+The scheduler:
+
+1. validates contribution values
+2. preserves every input work item
+3. orders larger contributions first
+4. applies deterministic item-index tie breaking
+5. records reordered positions
+6. records zero/near-zero contributions
+7. estimates reference scheduling overhead
+
+The scheduler does not execute the work itself.
+
+---
+
+## Synchronous Reference
+
+The scheduler provides:
+
+    ContributionScheduler::synchronous_reference()
+
+The synchronous reference preserves the supplied work order.
+
+This is intentionally separate from contribution-driven ordering so that correctness/reference execution does not depend on the scheduling heuristic.
+
+No asynchronous execution model is claimed by this phase.
+
+---
+
+## Work Metrics
+
+The Phase 11 metrics expose:
+
+    input_item_count
+    scheduled_item_count
+    reordered_item_count
+    zero_contribution_count
+    stale_work_count
+    redundant_work_count
+    scheduling_overhead
+
+### Reordered Work
+
+`reordered_item_count` reports positions whose scheduled location differs from their original position.
+
+The plan also provides:
+
+    reordered()
+
+which reports whether any item was reordered.
+
+### Zero Contribution
+
+`zero_contribution_count` reports contributions whose absolute magnitude is within the configured zero-contribution epsilon.
+
+Zero contribution is intentionally not classified as stale work.
+
+### Redundant Work
+
+`redundant_work_count` counts duplicate `item_index` requests.
+
+For example:
+
+    {0, 1, 1, 2, 2, 2}
+
+contains:
+
+    3
+
+redundant requests.
+
+### Stale Work
+
+Stale work is not inferred from contribution magnitude.
+
+The execution layer explicitly reports stale observations through:
+
+    ContributionWorkObservation
+
+This keeps stale-work measurement separate from contribution size.
+
+### Scheduling Overhead
+
+The scheduler exposes a deterministic CPU/reference scheduling-overhead estimate.
+
+The current reference model uses:
+
+    log2(N)
+
+where `N` is the number of input work items.
+
+This is a planning-layer estimate only.
+
+It is not a measured GPU execution time, CPU wall-clock benchmark, or claim of runtime overhead equivalence with the paper.
+
+---
+
+# Phase 11 Files
+
+The following files were added or modified for Phase 11:
+
+    include/scheduling/contribution_scheduler.hpp
+    src/scheduling/contribution_scheduler.cpp
+    include/algorithms/pagerank.hpp
+    src/algorithms/pagerank.cpp
+    include/algorithms/sssp.hpp
+    src/algorithms/sssp.cpp
+    CMakeLists.txt
+    tests/unit_tests.cpp
+
+---
+
+# Phase 11 Tests
+
+The existing namespace-based `tests/unit_tests.cpp` test target was extended with Contribution-Driven Scheduling coverage for:
+
+1. Contribution ordering by descending priority.
+2. Deterministic contribution tie breaking.
+3. Zero-contribution epsilon accounting.
+4. Reordering metric calculation.
+5. Synchronous reference ordering.
+6. Redundant-work measurement.
+7. Stale-work observation measurement.
+8. Contribution-priority construction.
+9. Mismatched contribution-input validation.
+10. PageRank contribution calculation.
+11. PageRank contribution → scheduler integration.
+12. SSSP contribution calculation.
+13. SSSP contribution → scheduler integration.
+14. Reference scheduling-overhead estimation.
+15. Scheduling-plan reordered accessor.
+16. Non-finite contribution rejection.
+
+The tests remain integrated into the existing `unit_tests` executable.
+
+No separate Phase 11 test executable was introduced.
+
+---
+
+# Phase 11 Validation Result
+
+The repository owner ran:
+
+    cmake --build build -j
+    ctest --test-dir build --output-on-failure
+
+Build result:
+
+    PASS
+
+CTest result:
+
+    1/4 Test #1: unit_tests ....................... Passed
+    2/4 Test #2: algorithm_tests .................. Passed
+    3/4 Test #3: cuda_algorithm_tests ............. Passed
+    4/4 Test #4: experiment_runner_smoke .......... Passed
+
+    100% tests passed, 0 tests failed out of 4
+
+The CUDA algorithm tests passed in this validation.
+
+This confirms the current Phase 11 build and test state supplied by the repository owner.
+
+No benchmark or performance equivalence is claimed.
+
+---
+
+# Phase 11 Paper Fidelity
+
+The implementation follows the reproduction plan's contribution-driven scheduling direction:
+
+- work items are prioritized by contribution/delta
+- larger contributions receive earlier priority
+- synchronous execution remains the correctness reference
+- stale/redundant work is explicitly measurable
+- scheduling overhead is represented as a reference planning metric
+
+The exact internal scheduler data structures, queue implementation, runtime dependency propagation, and complete asynchronous execution behavior are not sufficiently specified by the available paper material.
+
+Therefore the current implementation is explicitly a **CPU/reference scheduling abstraction**.
+
+The scheduler has not yet been integrated with the SEP-Graph GPU worklist/execution layer.
+
+That integration belongs to the later SEP-Graph phases.
+
+---
+
+# Phase 11 Important Implementation Details
+
+## Generic Contribution Priority
+
+The scheduler consumes:
+
+    ContributionPriority
+
+rather than computing algorithm-specific contributions.
+
+This keeps the scheduling layer independent from PageRank and SSSP implementation details.
+
+## Deterministic Ordering
+
+Contributions are ordered by descending value.
+
+For equal contributions, the scheduler uses ascending `item_index` when deterministic tie breaking is enabled.
+
+This ensures repeatable scheduling plans for identical inputs.
+
+## PageRank Reference Delta
+
+PageRank contributions are computed from one synchronous update using the existing CPU PageRank semantics.
+
+The algorithm itself remains synchronous.
+
+The contribution output is therefore a scheduling signal rather than an asynchronous execution mechanism.
+
+## SSSP Reference Contribution
+
+SSSP contributions are based on externally supplied tentative-distance changes.
+
+The scheduler does not fabricate an unsupported paper-specific SSSP equation.
+
+## Stale Work
+
+Stale work is represented through explicit execution observations.
+
+The scheduler does not assume:
+
+    zero contribution == stale work
+
+This distinction is intentional.
+
+## Redundant Work
+
+Redundant work is measured from duplicate logical work-item identifiers.
+
+This provides an objective reference metric without requiring assumptions about downstream execution state.
+
+## Scheduling Overhead
+
+The current scheduling overhead is a deterministic reference estimate:
+
+    log2(N)
+
+It is not a measured runtime quantity.
+
+---
+
 # Known Issues / Engineering Approximations
 
 The following are known and intentionally documented.
@@ -630,7 +1003,7 @@ They are not claimed to represent every physical PCIe transaction or runtime met
 
 ## 7. CUDA Execution
 
-The transfer-engine, task-combination, and hub-sorting layers remain reference/modeling or preparation components.
+The transfer-engine, task-combination, hub-sorting, and contribution-scheduling layers remain reference/modeling or preparation components.
 
 Passing CUDA algorithm tests does not mean the complete HyTGraph CUDA runtime has been reproduced.
 
@@ -700,6 +1073,31 @@ Hub sorting is therefore intended to run during preparation rather than repeated
 
 Callers that maintain external vertex-ID state must account for the resulting renumbering.
 
+## 18. Contribution-Driven Scheduling
+
+The Phase 11 scheduler is a CPU/reference planning abstraction.
+
+It does not yet:
+
+- execute asynchronous work
+- maintain a GPU work queue
+- integrate with SEP-Graph worklists
+- coordinate CUDA streams
+- perform neighbor shifting
+- overlap CPU compaction with GPU execution
+- measure actual scheduler wall-clock overhead
+- claim the paper's complete contribution-driven runtime behavior
+
+These mechanisms remain future work in the later SEP-Graph and HyTGraph integration phases.
+
+## 19. SSSP Contribution Definition
+
+The available paper material does not specify a complete formal SSSP contribution equation.
+
+The current implementation therefore uses tentative-distance improvement supplied by the execution layer.
+
+This is explicitly an engineering approximation and not presented as a recovered paper formula.
+
 ---
 
 # Validation Policy
@@ -736,6 +1134,7 @@ The repository's GitHub state may not contain the user's unpushed local changes.
 
 Last confirmed project validation:
 
+    cmake --build build -j
     ctest --test-dir build --output-on-failure
     PASS
 
@@ -752,15 +1151,11 @@ Individual tests:
     cuda_algorithm_tests ............. Passed
     experiment_runner_smoke .......... Passed
 
-Total test time:
-
-    2.06 sec
-
 CUDA algorithm tests:
 
     PASSED
 
-The current Phase 10 validation confirms the Hub Sorting, CSR reordering, existing algorithm tests, CUDA algorithm tests, and experiment-runner smoke test targets are passing.
+The current Phase 11 validation confirms the Contribution-Driven Scheduling layer, PageRank contribution generation, SSSP contribution generation, existing algorithm tests, CUDA algorithm tests, and experiment-runner smoke test targets are passing.
 
 No benchmark or performance equivalence is claimed.
 
@@ -768,7 +1163,7 @@ No benchmark or performance equivalence is claimed.
 
 # Current Milestone
 
-    M11 — Hub Sorting
+    M12 — Contribution-Driven Scheduling
 
 Status:
 
@@ -778,7 +1173,7 @@ Status:
 
 # Next Milestone
 
-    M12 — Contribution-Driven Scheduling
+    M13 — SEP-Graph Foundation
 
 Status:
 
@@ -788,8 +1183,8 @@ Status:
 
 # NEXT TASK
 
-**Next task:** Phase 11 — Contribution-Driven Scheduling.
+**Next task:** Phase 12 — SEP-Graph Foundation.
 
 The project is intentionally stopped here for this handoff.
 
-Before implementation resumes, inspect the relevant Phase 11 section of `MASTER_PLAN.md`, the original paper mechanism, and the current repository state. Then provide only the first required file and wait for local validation.
+Before implementation resumes, inspect the relevant Phase 12 section of `MASTER_PLAN.md`, the original paper mechanism, and the current repository state. Then provide only the first required file and wait for local validation.

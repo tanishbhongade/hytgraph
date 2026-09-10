@@ -162,4 +162,84 @@ namespace hytgraph::algorithms
         return result;
     }
 
+    std::vector<PageRankContribution> pagerank_contributions(
+        const graph::CSRGraph &graph,
+        const std::vector<float> &current_ranks,
+        const PageRankOptions &options)
+    {
+        validate_options(graph, options);
+
+        const std::size_t n =
+            static_cast<std::size_t>(graph.num_vertices());
+
+        if (current_ranks.size() != n)
+        {
+            throw std::invalid_argument(
+                "PageRank current_ranks size must match graph vertex count");
+        }
+
+        const float base =
+            (1.0F - options.damping_factor) /
+            static_cast<float>(n);
+
+        const IncomingCSR incoming = build_incoming_csr(graph);
+
+        float dangling_mass = 0.0F;
+
+        for (graph::CSRGraph::vertex_id source = 0;
+             static_cast<graph::CSRGraph::offset_type>(source) <
+             graph.num_vertices();
+             ++source)
+        {
+            if (graph.out_degree(source) == 0U)
+            {
+                dangling_mass +=
+                    current_ranks[static_cast<std::size_t>(source)];
+            }
+        }
+
+        const float dangling_share =
+            options.damping_factor * dangling_mass /
+            static_cast<float>(n);
+
+        std::vector<PageRankContribution> contributions;
+        contributions.reserve(n);
+
+        for (std::size_t destination = 0; destination < n; ++destination)
+        {
+            float incoming_sum = 0.0F;
+
+            const auto begin = incoming.offsets[destination];
+            const auto end = incoming.offsets[destination + 1U];
+
+            for (auto position = begin; position < end; ++position)
+            {
+                const auto source =
+                    incoming.sources[static_cast<std::size_t>(position)];
+
+                const auto degree = graph.out_degree(source);
+
+                if (degree != 0U)
+                {
+                    incoming_sum +=
+                        current_ranks[static_cast<std::size_t>(source)] /
+                        static_cast<float>(degree);
+                }
+            }
+
+            const float next_rank =
+                base +
+                dangling_share +
+                options.damping_factor * incoming_sum;
+
+            contributions.push_back(PageRankContribution{
+                destination,
+                std::fabs(
+                    next_rank -
+                    current_ranks[destination])});
+        }
+
+        return contributions;
+    }
+
 } // namespace hytgraph::algorithms

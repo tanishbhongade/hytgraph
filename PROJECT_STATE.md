@@ -2,40 +2,61 @@
 
 ## Current Phase
 
-**Phase 11 — Contribution-Driven Scheduling**
+**Phase 12 — SEP-Graph Foundation**
 
 ## Current Milestone
 
-**M12 — Contribution-Driven Scheduling**
+**M13 — SEP-Graph Foundation**
 
 ## Current Task
 
-Phase 11 Contribution-Driven Scheduling has been implemented, reviewed, integrated with the CPU/reference algorithm layers, and locally validated. The project is ready to stop at this point, with the next planned phase being Phase 12 — SEP-Graph Foundation.
+Phase 12 SEP-Graph Foundation has been implemented as a project-local execution abstraction layer.
 
-## Status
+The Phase 12 foundation establishes:
+
+- SEP execution variants
+- execution configuration
+- execution context
+- execution requirements
+- execution plans
+- execution selection
+- execution result representation
+- execution frontiers
+- frontier adaptation
+- execution-driver interfaces
+- deferred execution drivers
+- execution factory
+- SEP application contract
+- SEP application adapters
+- SEP application traits
+- compile-time foundation validation
+
+The implementation intentionally stops before concrete CUDA execution.
+
+The current Phase 12 layer provides the semantic boundary required for later SEP-Graph execution integration without claiming that the complete SEP-Graph runtime has already been reproduced.
+
+---
+
+# Status
 
 **COMPLETE**
 
-The Contribution-Driven Scheduling layer now provides a deterministic reference scheduling abstraction that orders logical work items by supplied contribution/delta priority while preserving the synchronous execution path as the correctness reference.
+Phase 12 establishes the SEP-Graph execution foundation required for the later CUDA/device integration phase.
 
-The implementation explicitly distinguishes:
+The implementation is currently a structural/reference execution layer.
 
-- PageRank contribution/delta generation
-- SSSP contribution generation from tentative-distance improvements
-- contribution-prioritized work ordering
-- deterministic tie breaking
-- synchronous reference ordering
-- reordered-work measurement
-- zero-contribution measurement
-- redundant-work measurement
-- explicitly observed stale-work measurement
-- reference scheduling-overhead estimation
-- validation of non-finite contribution values
-- PageRank-to-scheduler integration
-- SSSP-to-scheduler integration
-- algorithm-specific contribution generation versus generic scheduling
+It does **not** yet provide:
 
-No asynchronous execution speedup, GPU scheduling equivalence, or complete paper-runtime scheduling equivalence is claimed.
+- concrete CUDA SEP kernels
+- GPU worklist execution
+- CUDA stream coordination
+- actual device-side frontier execution
+- complete asynchronous execution
+- complete topology-driven GPU execution
+- complete data-driven GPU execution
+- paper-runtime performance equivalence
+
+Those mechanisms remain future work.
 
 ---
 
@@ -75,15 +96,6 @@ Active-edge semantics:
 
 Implemented logical graph partitions over contiguous vertex ranges while preserving CSR adjacency-list boundaries.
 
-Partitions expose:
-
-- vertex range
-- edge range
-- vertex count
-- edge count
-- target byte size
-- edge-data byte size
-
 ---
 
 ## Phase 4 — ExpTM-Filter
@@ -92,7 +104,7 @@ Partitions expose:
 
 Implemented the reference ExpTM-Filter transfer path and associated transfer metrics.
 
-This is a reference/modeling implementation rather than the paper's complete CUDA execution pipeline.
+This remains a reference/modeling implementation rather than the paper's complete CUDA execution pipeline.
 
 ---
 
@@ -110,17 +122,6 @@ Integrated the graph/activity/partition/transfer abstractions sufficiently for t
 
 Implemented the CPU/reference ExpTM-Compaction path.
 
-Implemented:
-
-- active-edge compaction
-- compacted destination/index representation
-- transfer-size accounting
-- CPU-side compaction accounting
-- deterministic reference behavior
-- unit tests
-
-The implementation is a reference CPU path and does not claim the paper's full asynchronous GPU/CPU pipeline.
-
 ---
 
 ## Phase 7 — ImpTM-Zero-Copy
@@ -129,79 +130,17 @@ The implementation is a reference CPU path and does not claim the paper's full a
 
 Implemented the ImpTM-Zero-Copy reference/modeling path.
 
-Implemented:
+The implementation models request counts, payload sizes, alignment overhead, TLP accounting, active-vertex/edge metrics, partition metrics, and fallback behavior.
 
-- per-active-vertex zero-copy request counting
-- configurable request payload size
-- configurable maximum outstanding requests per TLP
-- alignment-overhead accounting
-- aggregate modeled TLP accounting
-- active vertex / active edge metrics
-- partition-level metrics
-- zero-copy preparation result
-- modeled fallback mode
-- validation of partition and CSR consistency
-- deterministic unit tests
-
-The implementation follows the paper's request-count structure:
-
-    ceil(Do(v) * d1 / m) + am(v)
-
-where:
-
-- `Do(v)` = vertex out-degree
-- `d1` = bytes per destination/neighbor entry
-- `m` = request payload size
-- `am(v)` = alignment overhead indicator
-
-The current implementation keeps:
-
-    memory_requests
-
-and:
-
-    alignment_overhead
-
-as separate metrics.
-
-This is intentional. The Phase 8 cost model combines them according to the paper's zero-copy cost equation.
+It does not claim actual CUDA pinned-memory or mapped-memory execution.
 
 ---
 
-# Phase 7 Files
-
-The following files were added or modified for Phase 7:
-
-    include/transfer/zero_copy_engine.hpp
-    src/transfer/zero_copy_engine.cpp
-    CMakeLists.txt
-    tests/unit_tests.cpp
-
----
-
-# Phase 7 Validation
-
-The Phase 7 implementation was previously validated by the repository owner.
-
-The current project validation described below supersedes the older Phase 7-only validation state.
-
----
-
-# Phase 8 — HyTM Cost Model
+## Phase 8 — HyTM Cost Model
 
 **Status:** COMPLETE
 
-## Objective
-
-Implemented the HyTM cost model and deterministic transfer-engine selector described in the paper.
-
-The implementation remains scoped to the cost model and selector.
-
-Later scheduling/task-combining phases are implemented separately.
-
----
-
-## Phase 8 Requirements
+Implemented the HyTM cost model and deterministic transfer-engine selector.
 
 Implemented:
 
@@ -214,758 +153,581 @@ Implemented:
 - compaction cost
 - zero-copy cost
 - deterministic per-partition engine selection
-- unit tests for synthetic partition cases
-
-The selector implements the paper's strict comparison structure.
-
-The cost model operates independently for each logical partition.
 
 ---
 
-## Phase 8 Files
-
-The following files were added or modified for Phase 8:
-
-    include/transfer/hytm_cost_model.hpp
-    src/transfer/hytm_cost_model.cpp
-    CMakeLists.txt
-    tests/unit_tests.cpp
-
----
-
-# Phase 9 — Task Combining
+## Phase 9 — Task Combining
 
 **Status:** COMPLETE
 
-## Objective
+Implemented executable-task planning from HyTM engine decisions.
 
-Implemented the Task Combining layer that converts the HyTM engine decision for each logical partition into executable tasks.
+Implemented:
 
-The implementation follows the reproduction plan's Phase 9 behavior:
-
-- ExpTM-Filter partitions are combined only when consecutive.
-- ExpTM-Filter groups contain at most `k` partitions.
-- Default Filter combination limit is `k = 4`.
-- ExpTM-Compaction partitions selected for the same engine are accumulated into one executable task.
-- ImpTM-Zero-Copy partitions selected for the same engine are accumulated into one executable task.
-- Final executable tasks are ordered deterministically by their first logical partition.
-- Executable tasks receive sequential `task_index` values after final ordering.
-- Task-combination metrics report logical partitions, executable tasks, and engine-specific combination counts.
-
-The membership vector:
-
-    partition_indices
-
-is authoritative for executable-task membership.
-
-For consecutive groups, `first_partition_index` / `end_partition_index` also describe the represented partition interval. For globally combined Compaction / Zero-Copy tasks, intervening partitions may belong to another engine, so the membership vector remains authoritative.
+- consecutive Filter grouping
+- configurable Filter combination limit
+- Compaction grouping
+- Zero-Copy grouping
+- deterministic task ordering
+- sequential task indices
+- task-combination metrics
 
 ---
 
-# Phase 9 Files
+## Phase 10 — Hub Sorting
 
-The following files were added or modified for Phase 9:
+**Status:** COMPLETE
 
-    include/scheduling/task_combiner.hpp
-    src/scheduling/task_combiner.cpp
-    CMakeLists.txt
-    tests/unit_tests.cpp
+Implemented the hub importance calculation and deterministic hub-first CSR reordering.
 
----
+Hub importance:
 
-# Phase 9 Tests
-
-The existing namespace-based `tests/unit_tests.cpp` test target was extended with TaskCombiner coverage for:
-
-1. Filter grouping up to the configured `k`.
-2. Filter grouping only across consecutive Filter partitions.
-3. Compaction partition combination.
-4. Zero-Copy partition combination.
-5. Reduction from logical partitions to executable tasks.
-6. Empty input handling.
-7. Sequential executable-task indices.
-
-The tests remain integrated into the existing `unit_tests` executable. No separate Phase 9 test executable was introduced.
-
----
-
-# Phase 9 Validation Result
-
-The repository owner previously ran:
-
-    cmake --build build -j
-    ctest --test-dir build --output-on-failure
-
-Build result:
-
-    PASS
-
-CTest result:
-
-    1/4 Test #1: unit_tests ....................... Passed
-    2/4 Test #2: algorithm_tests .................. Passed
-    3/4 Test #3: cuda_algorithm_tests ............. Passed
-    4/4 Test #4: experiment_runner_smoke .......... Passed
-
-    100% tests passed, 0 tests failed out of 4
-
-The CUDA algorithm tests passed in this validation.
-
-This confirms the Phase 9 build and test state. No additional benchmark or performance claim is made.
-
----
-
-# Phase 9 Important Implementation Details
-
-## Filter Combination
+    H(v) = Do(v) * Di(v) / (Do_max * Di_max)
 
 Default:
 
-    filter_combine_k = 4
-
-A Filter run is grouped only with immediately consecutive Filter partitions.
-
-For example:
-
-    Filter
-    Filter
-    Compaction
-    Filter
-    Filter
-
-produces:
-
-    Filter {0, 1}
-    Compaction {2}
-    Filter {3, 4}
-
-Filter partitions are not combined across another engine selection.
-
-## Compaction Combination
-
-All logical partitions selected for ExpTM-Compaction are represented by one executable Compaction task.
-
-The partition membership vector preserves the original logical partition indices.
-
-## Zero-Copy Combination
-
-All logical partitions selected for ImpTM-Zero-Copy are represented by one executable Zero-Copy task.
-
-The partition membership vector preserves the original logical partition indices.
-
-## Task Ordering
-
-After engine-specific grouping, executable tasks are sorted by:
-
-    first_partition_index
-
-This restores deterministic logical-partition order.
-
-Sequential:
-
-    task_index
-
-values are assigned after this final ordering.
-
----
-
-# Phase 9 Metrics
-
-`TaskCombinationMetrics` exposes:
-
-    logical_partition_count
-    executable_task_count
-    filter_partitions_combined
-    compaction_partitions_combined
-    zero_copy_partitions_combined
-
-The plan also exposes:
-
-    task_count_reduced()
-    task_count_reduction()
-
-The metrics describe logical-to-executable task reduction and do not claim measured runtime speedup.
-
----
-
-# Phase 9 Paper Fidelity
-
-The implementation follows the reproduction plan's paper-aligned task-combination model:
-
-- small logical partitions remain available for fine-grained HyTM engine selection
-- Filter combines consecutive selected partitions with a maximum group size of four
-- Compaction combines partitions selected for the same engine
-- Zero-Copy combines partitions selected for the same engine
-
-The implementation stops at executable-task planning. It does not yet implement the full CUDA task execution, contribution-driven scheduling, neighbor-shifting pipeline, CUDA stream overlap, or complete SEP-Graph integration.
-
-Those later mechanisms remain future work.
-
----
-
-# Phase 10 — Hub Sorting
-
-**Status:** COMPLETE
-
-## Objective
-
-Implemented the Hub Sorting layer described in the paper and reproduction plan.
-
-The implementation computes a hub importance score for every vertex:
-
-    H(v) = Do(v) * Di(v) / (Do_max * Di_max)
-
-where:
-
-- `Do(v)` = vertex out-degree
-- `Di(v)` = vertex in-degree
-- `Do_max` = maximum out-degree in the graph
-- `Di_max` = maximum in-degree in the graph
-
-The default hub fraction is:
-
     hub_fraction = 0.08
 
-The selected hubs are placed at the beginning of the vertex ordering.
-
-Non-hub vertices retain their natural vertex-ID order.
-
-Hub sorting is intended as a preparation-time operation rather than an operation performed on every algorithm iteration.
-
----
-
-## Phase 10 Requirements
-
 Implemented:
 
-- in-degree calculation from CSR adjacency
-- out-degree-based hub scoring
-- paper-aligned hub importance equation
+- in-degree calculation
+- out-degree calculation
+- hub scoring
 - configurable hub fraction
-- approximate top-fraction hub selection
-- deterministic score ordering
-- deterministic vertex-ID tie breaking
-- hub-first vertex ordering
-- natural ordering of non-hubs
+- deterministic ranking
+- deterministic tie breaking
+- hub-first ordering
 - CSR vertex reordering
-- CSR destination-ID remapping
+- destination-ID remapping
 - edge-weight preservation
-- final CSR validation
-
-The `HubSorter` produces:
-
-    vertex_order
-    scores
-    hub_count
-
-The ordering uses:
-
-    vertex_order[new_vertex] = old_vertex
-
-The resulting order is then applied to the CSR graph through `CSRGraph::reorder_vertices()`.
+- CSR validation
 
 ---
 
-# Phase 10 Files
-
-The following files were added or modified for Phase 10:
-
-    include/scheduling/hub_sort.hpp
-    src/scheduling/hub_sort.cpp
-    include/graph/csr_graph.hpp
-    src/graph/csr_graph.cpp
-    CMakeLists.txt
-    tests/unit_tests.cpp
-
----
-
-# Phase 10 Tests
-
-The existing namespace-based `tests/unit_tests.cpp` test target was extended with Hub Sorting and CSR-reordering coverage for:
-
-1. Hub importance score calculation.
-2. Hub selection and hub-first ordering.
-3. Deterministic vertex permutation generation.
-4. Edgeless graph handling.
-5. CSR vertex reordering.
-6. CSR destination-ID remapping.
-7. CSR edge-weight preservation.
-8. Invalid vertex-order rejection.
-9. End-to-end HubSorter → CSRGraph reordering integration.
-
-The tests remain integrated into the existing `unit_tests` executable. No separate Phase 10 test executable was introduced.
-
----
-
-# Phase 10 Validation Result
-
-The repository owner ran:
-
-    ctest --test-dir build --output-on-failure
-
-CTest result:
-
-    1/4 Test #1: unit_tests ....................... Passed
-    2/4 Test #2: algorithm_tests .................. Passed
-    3/4 Test #3: cuda_algorithm_tests ............. Passed
-    4/4 Test #4: experiment_runner_smoke .......... Passed
-
-    100% tests passed, 0 tests failed out of 4
-
-    Total Test time = 2.06 sec
-
-The CUDA algorithm tests passed in this validation.
-
-This confirms the current Phase 10 build/test state supplied by the repository owner.
-
-No additional benchmark or performance claim is made.
-
----
-
-# Phase 10 Important Implementation Details
-
-## Hub Score
-
-For each vertex:
-
-    H(v) = Do(v) * Di(v) / (Do_max * Di_max)
-
-The implementation first computes the in-degree of every destination vertex from the CSR column indices.
-
-The out-degree is obtained directly from the CSR row offsets.
-
-Vertices are ranked by descending hub score.
-
-Ties are resolved by ascending vertex ID to provide deterministic behavior.
-
-## Hub Selection
-
-The configured fraction is applied to the total vertex count.
-
-The default configuration follows the paper's approximately top-8% hub selection.
-
-The implementation uses a ceiling for positive fractional hub counts, with numerical stabilization around values that are effectively exact integers.
-
-This provides deterministic behavior for small synthetic graphs while preserving the intended approximate top-fraction behavior.
-
-## Hub Ordering
-
-The resulting ordering is:
-
-    hubs in descending score order
-    non-hubs in natural vertex-ID order
-
-Only the selected hub prefix is reordered by score.
-
-Non-hub vertices are not score-sorted.
-
-## CSR Reordering
-
-`CSRGraph::reorder_vertices()` interprets the supplied ordering as:
-
-    vertex_order[new_vertex] = old_vertex
-
-The function:
-
-1. validates that the ordering is a complete permutation
-2. builds an old-to-new vertex-ID mapping
-3. copies each old adjacency list into its new vertex position
-4. remaps destination vertex IDs
-5. preserves edge weights
-6. replaces the CSR arrays
-7. validates the resulting CSR graph
-
-The permutation is validated before modifying the graph.
-
----
-
-# Phase 10 Paper Fidelity
-
-The implementation follows the paper's hub-sorting mechanism:
-
-- vertices with high incoming and outgoing degree receive higher hub scores
-- hub importance uses the degree-product score
-- approximately the top 8% are selected
-- hubs are grouped at the beginning of the CSR ordering
-- non-hubs retain natural ordering
-- hub sorting is treated as a preparation-time operation
-
-The paper's later hub-driven scheduling behavior is not implemented as part of Phase 10.
-
-The current phase therefore provides the hub ordering foundation required by the later scheduling phase without prematurely introducing unsupported scheduling behavior.
-
----
-
-# Phase 11 — Contribution-Driven Scheduling
+## Phase 11 — Contribution-Driven Scheduling
 
 **Status:** COMPLETE
 
-## Objective
-
-Implemented the CPU/reference Contribution-Driven Scheduling layer described by the reproduction plan.
-
-The implementation provides a generic scheduling abstraction that orders already-identified logical work items by supplied contribution/delta values.
-
-The scheduler does not compute algorithm-specific contributions itself. PageRank and SSSP provide algorithm-specific contribution records, while the generic scheduler consumes those values.
-
-The synchronous execution path remains available as the correctness/reference path.
-
----
-
-## Phase 11 Requirements
+Implemented the CPU/reference Contribution-Driven Scheduling layer.
 
 Implemented:
 
-- generic contribution-priority representation
-- PageRank contribution/delta generation
+- generic contribution priority representation
+- PageRank contribution generation
 - SSSP contribution generation
-- contribution-driven priority ordering
-- deterministic contribution tie breaking
+- contribution-priority ordering
+- deterministic tie breaking
 - synchronous reference ordering
 - reordered-work measurement
 - zero-contribution measurement
 - redundant-work measurement
-- explicitly observed stale-work measurement
-- reference scheduling-overhead estimation
-- validation of finite contribution values
-- contribution-priority construction helper
+- explicit stale-work observation
+- scheduling-overhead estimation
 - PageRank → scheduler integration
 - SSSP → scheduler integration
+- non-finite contribution validation
 
-The scheduler prioritizes larger supplied contribution values first.
-
-For deterministic ties, lower `item_index` values are ordered first.
-
-The implementation does not claim that asynchronous contribution-driven scheduling is automatically faster.
+The scheduler remains a CPU/reference planning abstraction and does not execute asynchronous GPU work.
 
 ---
 
-## PageRank Contributions
+# Phase 12 — SEP-Graph Foundation
 
-The Phase 11 PageRank layer provides:
+**Status:** COMPLETE
 
-    PageRankContribution
+## Objective
+
+Establish a project-local SEP-Graph execution foundation that captures the semantic execution variants and application/execution boundaries required for later CUDA integration.
+
+The implementation intentionally avoids introducing dependencies on the project's concrete CUDA graph/runtime implementation at this stage.
+
+The Phase 12 foundation is therefore an architectural and structural execution layer rather than a complete GPU execution implementation.
+
+---
+
+## Phase 12 Requirements
+
+Implemented:
+
+- SEP execution variant representation
+- SYNC/ASYNC execution modes
+- PUSH/PULL message-passing modes
+- DATA_DRIVEN/TOPOLOGY_DRIVEN scheduling modes
+- canonical SEP variant names
+- variant parsing
+- variant validation
+- execution configuration
+- execution context
+- graph/context structural requirements
+- frontier requirements
+- execution plans
+- execution-selection abstraction
+- execution results
+- execution-driver base interface
+- deferred execution driver
+- execution factory
+- execution frontier abstraction
+- frontier adapter
+- SEP application contract
+- application adapter
+- application type traits
+- application compatibility detection
+- compile-time foundation validation
+
+The eight execution combinations represented by the Phase 12 variant model are:
+
+    SYNC_PUSH_DD
+    SYNC_PULL_DD
+    SYNC_PUSH_TD
+    SYNC_PULL_TD
+    ASYNC_PUSH_DD
+    ASYNC_PULL_DD
+    ASYNC_PUSH_TD
+    ASYNC_PULL_TD
+
+---
+
+# Phase 12 Execution Variant
+
+The execution variant is represented as the Cartesian product of:
+
+    ExecutionMode
+    MessagePassing
+    SchedulingMode
 
 with:
 
-    vertex
-    contribution
+    ExecutionMode:
+        SYNC
+        ASYNC
 
-The contribution is derived from the absolute difference between the synchronous next PageRank value and the current rank:
+    MessagePassing:
+        PUSH
+        PULL
 
-    contribution = |next_rank - current_rank|
+    SchedulingMode:
+        DATA_DRIVEN
+        TOPOLOGY_DRIVEN
 
-The calculation uses the existing CPU PageRank update semantics, including:
+All eight combinations are structurally valid at the Phase 12 abstraction level.
 
-- damping factor
-- incoming contributions
-- dangling mass
-- uniform base contribution
-
-This provides a reference delta signal for contribution-driven scheduling without changing the synchronous PageRank algorithm.
-
----
-
-## SSSP Contributions
-
-The Phase 11 SSSP layer provides:
-
-    SSSPContribution
-
-with:
-
-    vertex
-    contribution
-
-The contribution is supplied from tentative-distance changes.
-
-For finite distances:
-
-    contribution = current_distance - candidate_distance
-
-when the candidate represents an improvement greater than the configured tolerance.
-
-Distance increases and unchanged distances produce zero contribution.
-
-For:
-
-    infinity -> finite
-
-the implementation assigns a unit useful-work priority because a finite numeric distance difference cannot be computed from infinity.
-
-This is an engineering scheduling abstraction rather than a claim that the paper specifies this exact SSSP contribution equation.
+The variant also provides canonical string conversion/parsing so execution-selection code does not need to depend on enum implementation details.
 
 ---
 
-## Contribution Scheduler
+# Phase 12 Execution Requirements
 
-The generic scheduler provides:
+The structural execution requirements are intentionally limited.
 
-    ContributionPriority
+At this phase:
 
-containing:
+- a graph must be present in the execution context;
+- DATA_DRIVEN variants require a frontier;
+- TOPOLOGY_DRIVEN variants do not require a frontier.
 
-    item_index
-    contribution
+The requirements layer does not validate:
 
-The scheduler produces:
+- CUDA availability
+- GPU memory
+- graph correctness beyond the execution-context contract
+- partition correctness
+- algorithm convergence
+- device transfer state
+- kernel availability
+- runtime performance
 
-    ContributionSchedulingPlan
-
-containing:
-
-    ordered_item_indices
-    metrics
-
-The scheduler:
-
-1. validates contribution values
-2. preserves every input work item
-3. orders larger contributions first
-4. applies deterministic item-index tie breaking
-5. records reordered positions
-6. records zero/near-zero contributions
-7. estimates reference scheduling overhead
-
-The scheduler does not execute the work itself.
+Those checks belong to later execution/integration layers.
 
 ---
 
-## Synchronous Reference
+# Phase 12 Execution Context
 
-The scheduler provides:
+The execution context provides the runtime-independent state required by execution selection and execution planning.
 
-    ContributionScheduler::synchronous_reference()
+The context establishes whether the execution environment contains the structural resources required by a selected variant.
 
-The synchronous reference preserves the supplied work order.
+In particular, the context can determine whether:
 
-This is intentionally separate from contribution-driven ordering so that correctness/reference execution does not depend on the scheduling heuristic.
+- a graph is present;
+- a frontier is present when required;
+- the selected execution variant is structurally satisfiable.
 
-No asynchronous execution model is claimed by this phase.
-
----
-
-## Work Metrics
-
-The Phase 11 metrics expose:
-
-    input_item_count
-    scheduled_item_count
-    reordered_item_count
-    zero_contribution_count
-    stale_work_count
-    redundant_work_count
-    scheduling_overhead
-
-### Reordered Work
-
-`reordered_item_count` reports positions whose scheduled location differs from their original position.
-
-The plan also provides:
-
-    reordered()
-
-which reports whether any item was reordered.
-
-### Zero Contribution
-
-`zero_contribution_count` reports contributions whose absolute magnitude is within the configured zero-contribution epsilon.
-
-Zero contribution is intentionally not classified as stale work.
-
-### Redundant Work
-
-`redundant_work_count` counts duplicate `item_index` requests.
-
-For example:
-
-    {0, 1, 1, 2, 2, 2}
-
-contains:
-
-    3
-
-redundant requests.
-
-### Stale Work
-
-Stale work is not inferred from contribution magnitude.
-
-The execution layer explicitly reports stale observations through:
-
-    ContributionWorkObservation
-
-This keeps stale-work measurement separate from contribution size.
-
-### Scheduling Overhead
-
-The scheduler exposes a deterministic CPU/reference scheduling-overhead estimate.
-
-The current reference model uses:
-
-    log2(N)
-
-where `N` is the number of input work items.
-
-This is a planning-layer estimate only.
-
-It is not a measured GPU execution time, CPU wall-clock benchmark, or claim of runtime overhead equivalence with the paper.
+The context remains independent from concrete CUDA/device state.
 
 ---
 
-# Phase 11 Files
+# Phase 12 Execution Plan
 
-The following files were added or modified for Phase 11:
+The execution plan provides a deterministic representation of the selected execution configuration.
 
-    include/scheduling/contribution_scheduler.hpp
-    src/scheduling/contribution_scheduler.cpp
-    include/algorithms/pagerank.hpp
-    src/algorithms/pagerank.cpp
-    include/algorithms/sssp.hpp
-    src/algorithms/sssp.cpp
-    CMakeLists.txt
+It separates:
+
+- execution selection
+- execution requirements
+- execution configuration
+- later execution
+
+This allows the execution layer to determine what should execute without requiring the current phase to actually launch kernels.
+
+---
+
+# Phase 12 Execution Selection
+
+Execution selection provides a deterministic mapping from an explicitly supplied execution configuration to the corresponding execution variant/plan.
+
+No automatic performance heuristic or runtime switching is introduced at this phase.
+
+The selection layer therefore does not claim to reproduce any undocumented SEP runtime scheduling heuristic.
+
+---
+
+# Phase 12 Execution Result
+
+The execution result provides a common representation for execution-step outcomes.
+
+The Phase 12 foundation includes result states for cases such as:
+
+- successful execution
+- initialization requirements
+- invalid configuration
+- deferred/unimplemented execution
+
+The result abstraction allows later CUDA-backed execution drivers to report execution state without changing the higher-level execution interfaces.
+
+---
+
+# Phase 12 Execution Drivers
+
+The execution-driver hierarchy establishes the boundary between execution planning and actual graph execution.
+
+The base driver provides the common interface for:
+
+- initialization
+- execution-context binding
+- execution-step execution
+- selected execution-variant reporting
+
+Phase 12 supplies a deferred execution driver.
+
+The deferred driver deliberately does not execute graph work.
+
+Instead, an execution step reports the appropriate non-concrete execution state because the actual CUDA implementation is deferred to the later SEP execution phase.
+
+---
+
+# Phase 12 Execution Factory
+
+The execution factory creates an execution driver for an explicitly selected SEP variant.
+
+The factory:
+
+- validates the selected variant;
+- accepts all eight structurally valid variants;
+- creates a deferred Phase 12 driver;
+- supports creation from `SEPExecutionVariant`;
+- supports creation from `SEPExecutionConfig`;
+- supports creation from canonical variant strings.
+
+The factory does not perform heuristic runtime selection.
+
+---
+
+# Phase 12 Frontier
+
+The SEP frontier abstraction represents the logical active work set required by data-driven execution.
+
+The frontier interface exposes operations for:
+
+- clearing the frontier
+- pushing a node
+- popping a node
+- checking size
+- checking emptiness
+
+The Phase 12 frontier remains an execution abstraction.
+
+It does not claim to reproduce the complete SEP-Graph GPU worklist implementation.
+
+---
+
+# Phase 12 Frontier Adapter
+
+The frontier adapter provides a boundary between the SEP execution layer and a future/project-local frontier implementation.
+
+The adapter keeps concrete worklist implementation details outside the execution contract.
+
+Actual GPU/device frontier management remains future work.
+
+---
+
+# Phase 12 SEP Application Contract
+
+`SEPApplication` establishes the application-facing semantic contract for SEP execution.
+
+The interface captures:
+
+- execution-variant configuration
+- initial vertex values
+- initial buffers
+- buffer identity
+- value/buffer combination
+- message accumulation
+- weighted message accumulation
+- activity testing
+- post-computation hooks
+- priority testing
+- edge-weight requirements
+- activity-predicate support
+
+The contract is intentionally independent of:
+
+- `CSRGraph`
+- `ActivityTracker`
+- `LogicalPartition`
+- concrete Task classes
+- concrete worklists
+- CUDA device structures
+
+This allows PageRank and SSSP to provide SEP semantics without forcing them into a new concrete runtime hierarchy.
+
+---
+
+# Phase 12 Application Adapter
+
+`SEPApplicationAdapter` provides a non-owning adapter around an existing application implementation.
+
+The adapter:
+
+- does not own the underlying application;
+- does not copy the underlying application;
+- forwards SEP application operations;
+- forwards execution-variant configuration;
+- exposes the underlying application when required;
+- avoids imposing a new inheritance hierarchy on existing PageRank/SSSP implementations.
+
+The adapter is intended to bridge existing project algorithms into the SEP execution boundary.
+
+---
+
+# Phase 12 Application Traits
+
+`SEPApplicationTraits` provides compile-time execution-level information about applications.
+
+The traits expose:
+
+- application value type
+- buffer type
+- weight type
+- node ID type
+- edge-weight requirements
+- activity-predicate support
+- SEP application compatibility detection
+
+Additional trait definitions describe PageRank-like and SSSP-like execution requirements.
+
+SSSP is represented as requiring edge weights.
+
+PageRank is represented as not requiring explicit per-edge weights for the SEP accumulation abstraction.
+
+These traits describe execution requirements and do not implement algorithm execution.
+
+---
+
+# Phase 12 Files
+
+The following SEP foundation headers were added for Phase 12:
+
+    include/sep/sep_application.hpp
+    include/sep/sep_application_adapter.hpp
+    include/sep/sep_application_traits.hpp
+    include/sep/sep_execution_config.hpp
+    include/sep/sep_execution_context.hpp
+    include/sep/sep_execution_driver.hpp
+    include/sep/sep_execution_driver_base.hpp
+    include/sep/sep_execution_factory.hpp
+    include/sep/sep_execution_plan.hpp
+    include/sep/sep_execution_requirements.hpp
+    include/sep/sep_execution_result.hpp
+    include/sep/sep_execution_selection.hpp
+    include/sep/sep_execution_variant.hpp
+    include/sep/sep_execution_variant_registry.hpp
+    include/sep/sep_frontier.hpp
+    include/sep/sep_frontier_adapter.hpp
+
+The existing consolidated test target was also extended:
+
     tests/unit_tests.cpp
 
----
+Phase-specific standalone tests were used during development and validation of the individual SEP foundation components.
 
-# Phase 11 Tests
-
-The existing namespace-based `tests/unit_tests.cpp` test target was extended with Contribution-Driven Scheduling coverage for:
-
-1. Contribution ordering by descending priority.
-2. Deterministic contribution tie breaking.
-3. Zero-contribution epsilon accounting.
-4. Reordering metric calculation.
-5. Synchronous reference ordering.
-6. Redundant-work measurement.
-7. Stale-work observation measurement.
-8. Contribution-priority construction.
-9. Mismatched contribution-input validation.
-10. PageRank contribution calculation.
-11. PageRank contribution → scheduler integration.
-12. SSSP contribution calculation.
-13. SSSP contribution → scheduler integration.
-14. Reference scheduling-overhead estimation.
-15. Scheduling-plan reordered accessor.
-16. Non-finite contribution rejection.
-
-The tests remain integrated into the existing `unit_tests` executable.
-
-No separate Phase 11 test executable was introduced.
+The project's final test organization remains centered around the existing `unit_tests` target.
 
 ---
 
-# Phase 11 Validation Result
+# Phase 12 Tests
 
-The repository owner ran:
+Phase 12 testing covered the SEP foundation components, including:
 
-    cmake --build build -j
-    ctest --test-dir build --output-on-failure
+1. SEP execution variant construction.
+2. SEP execution variant equality/accessors.
+3. SEP execution variant string representation.
+4. SEP execution variant parsing.
+5. SEP execution variant validation.
+6. SEP execution configuration defaults.
+7. SEP execution configuration mutation.
+8. SEP execution context graph presence.
+9. SEP execution context frontier requirements.
+10. Execution requirement validation.
+11. Execution plan construction.
+12. Execution plan variant/configuration preservation.
+13. Execution selection behavior.
+14. Execution result state representation.
+15. Execution frontier behavior.
+16. Frontier clearing.
+17. Frontier push/pop behavior.
+18. Frontier reuse.
+19. Deferred execution factory behavior.
+20. Execution driver interface behavior.
+21. SEP application polymorphism.
+22. SEP application adapter interface compatibility.
+23. SEP application trait type detection.
+24. SEP application compatibility detection.
+25. Compile-time SEP foundation header compatibility.
 
-Build result:
-
-    PASS
-
-CTest result:
-
-    1/4 Test #1: unit_tests ....................... Passed
-    2/4 Test #2: algorithm_tests .................. Passed
-    3/4 Test #3: cuda_algorithm_tests ............. Passed
-    4/4 Test #4: experiment_runner_smoke .......... Passed
-
-    100% tests passed, 0 tests failed out of 4
-
-The CUDA algorithm tests passed in this validation.
-
-This confirms the current Phase 11 build and test state supplied by the repository owner.
-
-No benchmark or performance equivalence is claimed.
-
----
-
-# Phase 11 Paper Fidelity
-
-The implementation follows the reproduction plan's contribution-driven scheduling direction:
-
-- work items are prioritized by contribution/delta
-- larger contributions receive earlier priority
-- synchronous execution remains the correctness reference
-- stale/redundant work is explicitly measurable
-- scheduling overhead is represented as a reference planning metric
-
-The exact internal scheduler data structures, queue implementation, runtime dependency propagation, and complete asynchronous execution behavior are not sufficiently specified by the available paper material.
-
-Therefore the current implementation is explicitly a **CPU/reference scheduling abstraction**.
-
-The scheduler has not yet been integrated with the SEP-Graph GPU worklist/execution layer.
-
-That integration belongs to the later SEP-Graph phases.
+The Phase 12 tests were consolidated into the existing project unit-test infrastructure rather than introducing a permanent collection of independent test executables.
 
 ---
 
-# Phase 11 Important Implementation Details
+# Phase 12 Validation
 
-## Generic Contribution Priority
+The individual Phase 12 foundation tests were compiled and executed during implementation.
 
-The scheduler consumes:
+The validated test components included:
 
-    ContributionPriority
+    sep_execution_variant_test
+    sep_execution_config_test
+    sep_execution_context_test
+    sep_execution_requirements_test
+    sep_execution_plan_test
+    sep_execution_selection_test
+    sep_frontier_test
+    sep_execution_factory_test
+    sep_execution_driver_test
+    sep_application_test
+    sep_application_adapter_test
+    sep_application_traits_test
+    sep_foundation_compile_test
 
-rather than computing algorithm-specific contributions.
+The owner subsequently consolidated the relevant Phase 12 test coverage into the project's existing `tests/unit_tests.cpp`.
 
-This keeps the scheduling layer independent from PageRank and SSSP implementation details.
+The final repository-wide validation should be considered authoritative once the consolidated `unit_tests` target has been rebuilt and executed after the Phase 12 merge.
 
-## Deterministic Ordering
+No benchmark or performance-equivalence claim is made.
 
-Contributions are ordered by descending value.
+---
 
-For equal contributions, the scheduler uses ascending `item_index` when deterministic tie breaking is enabled.
+# Phase 12 Paper Fidelity
 
-This ensures repeatable scheduling plans for identical inputs.
+The Phase 12 implementation follows the SEP-Graph execution model at the semantic boundary level.
 
-## PageRank Reference Delta
+It explicitly represents:
 
-PageRank contributions are computed from one synchronous update using the existing CPU PageRank semantics.
+- synchronous execution
+- asynchronous execution
+- push message passing
+- pull message passing
+- data-driven scheduling
+- topology-driven scheduling
+- frontier-driven execution requirements
+- application-defined update semantics
+- application-defined activity semantics
+- application-defined priority semantics
 
-The algorithm itself remains synchronous.
+The implementation does not claim to reproduce undocumented internal SEP-Graph implementation details.
 
-The contribution output is therefore a scheduling signal rather than an asynchronous execution mechanism.
+In particular, Phase 12 does not claim to reproduce:
 
-## SSSP Reference Contribution
+- exact CUDA kernel implementations
+- exact GPU worklist structures
+- exact memory layouts
+- exact CUDA scheduling behavior
+- exact stream behavior
+- exact device-side synchronization
+- exact performance characteristics
 
-SSSP contributions are based on externally supplied tentative-distance changes.
+Those mechanisms belong to later implementation phases.
 
-The scheduler does not fabricate an unsupported paper-specific SSSP equation.
+---
 
-## Stale Work
+# Phase 12 Important Implementation Details
 
-Stale work is represented through explicit execution observations.
+## Eight SEP Variants
 
-The scheduler does not assume:
+The foundation models eight execution combinations:
 
-    zero contribution == stale work
+    SYNC × PUSH × DATA_DRIVEN
+    SYNC × PULL × DATA_DRIVEN
+    SYNC × PUSH × TOPOLOGY_DRIVEN
+    SYNC × PULL × TOPOLOGY_DRIVEN
 
-This distinction is intentional.
+    ASYNC × PUSH × DATA_DRIVEN
+    ASYNC × PULL × DATA_DRIVEN
+    ASYNC × PUSH × TOPOLOGY_DRIVEN
+    ASYNC × PULL × TOPOLOGY_DRIVEN
 
-## Redundant Work
+These combinations are represented explicitly rather than encoded through implicit boolean flags.
 
-Redundant work is measured from duplicate logical work-item identifiers.
+---
 
-This provides an objective reference metric without requiring assumptions about downstream execution state.
+## Data-Driven Execution
 
-## Scheduling Overhead
+Data-driven variants require a frontier.
 
-The current scheduling overhead is a deterministic reference estimate:
+The frontier identifies candidate active work.
 
-    log2(N)
+The Phase 12 abstraction does not require the execution driver to scan the entire graph in order to identify work.
 
-It is not a measured runtime quantity.
+The actual GPU worklist implementation remains future work.
+
+---
+
+## Topology-Driven Execution
+
+Topology-driven variants do not structurally require a frontier.
+
+The application can provide an activity predicate through the SEP application contract.
+
+This establishes the semantic boundary for topology-driven execution without implementing the eventual GPU traversal mechanism.
+
+---
+
+## Weighted Execution
+
+The application contract supports both unweighted and weighted accumulation.
+
+PageRank can use the unweighted accumulation operation.
+
+SSSP can use the weighted accumulation operation.
+
+The execution foundation therefore does not need to inspect concrete application types to determine whether weighted edges are semantically required.
+
+---
+
+## Deferred Execution
+
+The Phase 12 factory returns deferred drivers.
+
+This is intentional.
+
+The foundation establishes the execution architecture without falsely implying that a selected SEP variant is already executable on the GPU.
+
+Concrete CUDA execution belongs to the next implementation stage.
 
 ---
 
 # Known Issues / Engineering Approximations
 
-The following are known and intentionally documented.
+The following remain known and intentional.
 
 ## 1. Exact Original Partition Boundaries
 
@@ -973,21 +735,27 @@ The paper does not provide enough information to reproduce every original runtim
 
 The project therefore uses deterministic logical partitions.
 
+---
+
 ## 2. Logical Partitioning
 
-Logical partitions currently serve as graph-analysis/reference abstractions.
+Logical partitions remain graph-analysis/reference abstractions rather than a complete reproduction of the paper's runtime partition scheduler.
 
-They are not yet connected to a complete runtime scheduler.
+---
 
 ## 3. ExpTM-Filter
 
-The current implementation is a reference transfer model rather than the complete CUDA transfer mechanism.
+The current implementation remains a reference transfer model rather than the complete CUDA transfer mechanism.
+
+---
 
 ## 4. ExpTM-Compaction
 
-The current implementation is CPU/reference compaction.
+The current implementation remains CPU/reference compaction.
 
-It does not claim to reproduce the paper's complete asynchronous execution pipeline.
+It does not claim to reproduce the complete asynchronous execution pipeline.
+
+---
 
 ## 5. Subway
 
@@ -995,17 +763,23 @@ The exact internal Subway implementation and scheduling behavior are not fully s
 
 No unsupported implementation details are being invented.
 
+---
+
 ## 6. Physical Transfer Accounting
 
 Current transfer sizes are logical/reference byte counts.
 
 They are not claimed to represent every physical PCIe transaction or runtime metadata transfer.
 
+---
+
 ## 7. CUDA Execution
 
-The transfer-engine, task-combination, hub-sorting, and contribution-scheduling layers remain reference/modeling or preparation components.
+The transfer-engine, task-combination, hub-sorting, contribution-scheduling, and SEP foundation layers remain reference/modeling, preparation, or architectural components until concrete CUDA execution is implemented.
 
 Passing CUDA algorithm tests does not mean the complete HyTGraph CUDA runtime has been reproduced.
+
+---
 
 ## 8. Zero-Copy Mapping
 
@@ -1013,11 +787,15 @@ Phase 7 does not perform actual CUDA pinned host allocation, host registration, 
 
 The behavior is explicitly modeled.
 
+---
+
 ## 9. Zero-Copy Alignment
 
 The zero-copy alignment calculation uses a logical CSR byte-offset proxy.
 
 It is not a physical host-memory address calculation.
+
+---
 
 ## 10. Compaction Throughput
 
@@ -1025,11 +803,15 @@ A reproducible paper-specific CPU compaction throughput measurement is not curre
 
 Phase 8 exposes throughput as a configurable model parameter rather than inventing a paper-specific measured value.
 
+---
+
 ## 11. Task Combination
 
 The current TaskCombiner is an executable-task planning layer.
 
 It does not yet execute grouped tasks, overlap transfers and computation, or implement the paper's complete scheduling pipeline.
+
+---
 
 ## 12. Task Ordering for Globally Combined Engines
 
@@ -1037,58 +819,66 @@ Compaction and Zero-Copy groups may contain non-consecutive logical partition in
 
 `partition_indices` is therefore authoritative for those task memberships.
 
+---
+
 ## 13. CMake CUDA Architecture Default
 
-The build was adjusted so that when CUDA is enabled and no explicit architecture is supplied, CMake uses:
+When CUDA is enabled and no explicit architecture is supplied, CMake uses:
 
     CMAKE_CUDA_ARCHITECTURES=native
 
-This is a build-configuration convenience to avoid guessing a GPU architecture. It is not a HyTGraph algorithmic behavior and does not claim paper fidelity.
+This is a build-configuration convenience and is not a HyTGraph algorithmic behavior.
+
+---
 
 ## 14. No Benchmark Claims
 
-No performance or benchmark equivalence to the original HyTGraph implementation is currently claimed.
+No performance or benchmark equivalence to the original HyTGraph or SEP-Graph implementation is currently claimed.
+
+---
 
 ## 15. Hub Count for Small Graphs
 
 The paper specifies approximately the top 8% but does not specify exact rounding behavior for very small graphs.
 
-The implementation uses deterministic ceiling behavior for positive fractional counts, with numerical stabilization around exact integer values.
+The implementation uses deterministic ceiling behavior for positive fractional counts.
 
 This is an engineering approximation for small synthetic graphs.
 
+---
+
 ## 16. Zero-Degree Graphs
 
-For graphs where the maximum in-degree or maximum out-degree is zero, the hub-score denominator is undefined.
+For graphs where maximum in-degree or maximum out-degree is zero, the hub-score denominator is undefined.
 
-The implementation assigns zero scores in this case rather than performing division by zero.
+The implementation assigns zero scores rather than performing division by zero.
 
-This is an engineering edge-case decision.
+---
 
 ## 17. Vertex Renumbering
 
-`CSRGraph::reorder_vertices()` changes the internal vertex numbering according to the supplied ordering and remaps destination IDs accordingly.
+`CSRGraph::reorder_vertices()` changes internal vertex numbering according to the supplied ordering and remaps destination IDs accordingly.
 
-Hub sorting is therefore intended to run during preparation rather than repeatedly after algorithm state has been established.
+Callers maintaining external vertex-ID state must account for the resulting renumbering.
 
-Callers that maintain external vertex-ID state must account for the resulting renumbering.
+---
 
 ## 18. Contribution-Driven Scheduling
 
-The Phase 11 scheduler is a CPU/reference planning abstraction.
+The Phase 11 scheduler remains a CPU/reference planning abstraction.
 
 It does not yet:
 
-- execute asynchronous work
-- maintain a GPU work queue
-- integrate with SEP-Graph worklists
-- coordinate CUDA streams
-- perform neighbor shifting
-- overlap CPU compaction with GPU execution
-- measure actual scheduler wall-clock overhead
-- claim the paper's complete contribution-driven runtime behavior
+- execute asynchronous work;
+- maintain a GPU work queue;
+- integrate with SEP-Graph GPU worklists;
+- coordinate CUDA streams;
+- perform neighbor shifting;
+- overlap CPU compaction with GPU execution;
+- measure actual scheduler wall-clock overhead;
+- claim the paper's complete contribution-driven runtime behavior.
 
-These mechanisms remain future work in the later SEP-Graph and HyTGraph integration phases.
+---
 
 ## 19. SSSP Contribution Definition
 
@@ -1096,7 +886,33 @@ The available paper material does not specify a complete formal SSSP contributio
 
 The current implementation therefore uses tentative-distance improvement supplied by the execution layer.
 
-This is explicitly an engineering approximation and not presented as a recovered paper formula.
+This is explicitly an engineering approximation.
+
+---
+
+## 20. SEP CUDA Execution
+
+Phase 12 does not yet provide concrete CUDA-backed implementations for the eight SEP execution variants.
+
+The current factory intentionally returns deferred execution drivers.
+
+The next SEP implementation phase must provide the concrete mapping between:
+
+    SEPExecutionVariant
+
+and:
+
+    CUDA/device execution
+
+including the appropriate:
+
+- graph traversal;
+- push/pull behavior;
+- data-driven/topology-driven behavior;
+- synchronous/asynchronous behavior;
+- frontier/worklist management;
+- application operations;
+- device-side state.
 
 ---
 
@@ -1126,44 +942,29 @@ Do not write, modify, delete, or generate files directly inside the repository.
 
 All implementation files must be provided as copy-pasteable content for the user to add manually.
 
-The repository's GitHub state may not contain the user's unpushed local changes. The user's local working tree is authoritative for newly implemented phases until those changes are committed/pushed by the repository owner.
+The repository's GitHub state may not contain the user's unpushed local changes.
+
+The user's local working tree is authoritative for newly implemented phases until those changes are committed/pushed by the repository owner.
 
 ---
 
 # Current Validation Status
 
-Last confirmed project validation:
+## Phase 12 Component Validation
 
-    cmake --build build -j
-    ctest --test-dir build --output-on-failure
-    PASS
+The individual Phase 12 foundation components were compiled and executed successfully during development after resolving the corresponding interface/test mismatches.
 
-CTest result:
+The consolidated project test file now contains the Phase 12 test coverage.
 
-    100% tests passed
-    0 tests failed
-    4 tests passed
+The remaining authoritative validation step is the repository-level build/test after the consolidated `unit_tests.cpp` changes have been incorporated.
 
-Individual tests:
-
-    unit_tests ....................... Passed
-    algorithm_tests .................. Passed
-    cuda_algorithm_tests ............. Passed
-    experiment_runner_smoke .......... Passed
-
-CUDA algorithm tests:
-
-    PASSED
-
-The current Phase 11 validation confirms the Contribution-Driven Scheduling layer, PageRank contribution generation, SSSP contribution generation, existing algorithm tests, CUDA algorithm tests, and experiment-runner smoke test targets are passing.
-
-No benchmark or performance equivalence is claimed.
+No performance claim is made.
 
 ---
 
 # Current Milestone
 
-    M12 — Contribution-Driven Scheduling
+    M13 — SEP-Graph Foundation
 
 Status:
 
@@ -1173,7 +974,7 @@ Status:
 
 # Next Milestone
 
-    M13 — SEP-Graph Foundation
+    M14 — SEP-Graph CUDA Execution
 
 Status:
 
@@ -1183,8 +984,15 @@ Status:
 
 # NEXT TASK
 
-**Next task:** Phase 12 — SEP-Graph Foundation.
+**Next task:** Phase 13 — SEP-Graph CUDA Execution.
 
-The project is intentionally stopped here for this handoff.
+The next phase should begin by inspecting:
 
-Before implementation resumes, inspect the relevant Phase 12 section of `MASTER_PLAN.md`, the original paper mechanism, and the current repository state. Then provide only the first required file and wait for local validation.
+- the Phase 13 section of `MASTER_PLAN.md`;
+- the original SEP-Graph paper;
+- the current Phase 12 execution interfaces;
+- the current CUDA algorithm/runtime architecture.
+
+The implementation should then introduce the first concrete CUDA/device execution component while preserving the Phase 12 semantic boundary.
+
+The first Phase 13 implementation must not prematurely replace the Phase 12 abstractions or introduce unsupported runtime behavior.

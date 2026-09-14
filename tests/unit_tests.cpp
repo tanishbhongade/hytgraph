@@ -6,6 +6,12 @@
 #include <cmath>
 #include <stdexcept>
 #include <limits>
+#include <array>
+#include <cassert>
+#include <cstddef>
+#include <deque>
+#include <string_view>
+#include <type_traits>
 
 #include "runtime/config.hpp"
 #include "runtime/result.hpp"
@@ -25,6 +31,116 @@
 
 #include "algorithms/pagerank.hpp"
 #include "algorithms/sssp.hpp"
+
+#include "sep/sep_application.hpp"
+#include "sep/sep_application_adapter.hpp"
+#include "sep/sep_application_traits.hpp"
+
+#include "sep/sep_execution_config.hpp"
+#include "sep/sep_execution_context.hpp"
+#include "sep/sep_execution_driver.hpp"
+#include "sep/sep_execution_driver_base.hpp"
+#include "sep/sep_execution_factory.hpp"
+#include "sep/sep_execution_plan.hpp"
+#include "sep/sep_execution_requirements.hpp"
+#include "sep/sep_execution_result.hpp"
+#include "sep/sep_execution_selection.hpp"
+#include "sep/sep_execution_variant.hpp"
+#include "sep/sep_execution_variant_registry.hpp"
+
+#include "sep/sep_frontier.hpp"
+#include "sep/sep_frontier_adapter.hpp"
+
+namespace sep_application_adapter_tests
+{
+#define main sep_application_adapter_tests_main
+#include "sep/sep_application_adapter_test.cpp"
+#undef main
+}
+
+namespace sep_application_tests
+{
+#define main sep_application_tests_main
+#include "sep/sep_application_test.cpp"
+#undef main
+}
+
+namespace sep_application_traits_tests
+{
+#define main sep_application_traits_tests_main
+#include "sep/sep_application_traits_test.cpp"
+#undef main
+}
+
+namespace sep_execution_config_tests
+{
+#define main sep_execution_config_tests_main
+#include "sep/sep_execution_config_test.cpp"
+#undef main
+}
+
+namespace sep_execution_context_tests
+{
+#define main sep_execution_context_tests_main
+#include "sep/sep_execution_context_test.cpp"
+#undef main
+}
+
+namespace sep_execution_driver_tests
+{
+#define main sep_execution_driver_tests_main
+#include "sep/sep_execution_driver_test.cpp"
+#undef main
+}
+
+namespace sep_execution_factory_tests
+{
+#define main sep_execution_factory_tests_main
+#include "sep/sep_execution_factory_test.cpp"
+#undef main
+}
+
+namespace sep_execution_plan_tests
+{
+#define main sep_execution_plan_tests_main
+#include "sep/sep_execution_plan_test.cpp"
+#undef main
+}
+
+namespace sep_execution_requirements_tests
+{
+#define main sep_execution_requirements_tests_main
+#include "sep/sep_execution_requirements_test.cpp"
+#undef main
+}
+
+namespace sep_execution_selection_tests
+{
+#define main sep_execution_selection_tests_main
+#include "sep/sep_execution_selection_test.cpp"
+#undef main
+}
+
+namespace sep_execution_variant_tests
+{
+#define main sep_execution_variant_tests_main
+#include "sep/sep_execution_variant_test.cpp"
+#undef main
+}
+
+namespace sep_foundation_compile_tests
+{
+#define main sep_foundation_compile_tests_main
+#include "sep/sep_foundation_compile_test.cpp"
+#undef main
+}
+
+namespace sep_frontier_tests
+{
+#define main sep_frontier_tests_main
+#include "sep/sep_frontier_test.cpp"
+#undef main
+}
 
 namespace
 {
@@ -3273,6 +3389,20 @@ int main()
         test_contribution_scheduler_overhead_estimate();
         test_contribution_scheduler_rejects_nan();
         test_contribution_scheduler_reordered_accessor();
+
+        sep_application_adapter_tests::sep_application_adapter_tests_main();
+        sep_application_tests::sep_application_tests_main();
+        sep_application_traits_tests::sep_application_traits_tests_main();
+        sep_execution_config_tests::sep_execution_config_tests_main();
+        sep_execution_context_tests::sep_execution_context_tests_main();
+        sep_execution_driver_tests::sep_execution_driver_tests_main();
+        sep_execution_factory_tests::sep_execution_factory_tests_main();
+        sep_execution_plan_tests::sep_execution_plan_tests_main();
+        sep_execution_requirements_tests::sep_execution_requirements_tests_main();
+        sep_execution_selection_tests::sep_execution_selection_tests_main();
+        sep_execution_variant_tests::sep_execution_variant_tests_main();
+        sep_foundation_compile_tests::sep_foundation_compile_tests_main();
+        sep_frontier_tests::sep_frontier_tests_main();
 
         std::cout << "All Phase 0 unit tests passed.\n";
         return 0;

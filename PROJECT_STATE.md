@@ -2,21 +2,21 @@
 
 ## Current Phase
 
-**Phase 14 — Data-movement bridge** _(ready to start)_
+**Phase 15 — Task combining bridge** _(ready to start)_
 
 ## Current Milestone
 
-**M14 — HyTGraph ↔ SEP data-movement bridge** _(READY)_
+**M15 — Task Combining with SEP worklists** _(READY)_
 
 ## Current Task
 
-Phase 13 is complete and validated. Phase 14 will feed the project-owned CSR graph and active-vertex set into the vendored SEP-Graph engine through `HyTMSEPBridge`, and will introduce the first real engine construction (`sepgraph::engine::Engine<...>`).
+Phase 14 is complete and validated. Phase 15 will feed `TaskCombiner` output into the vendored worklist representation.
 
 ---
 
 # Status
 
-Phases 0–13 are complete and validated in the user's local working tree.
+Phases 0–14 are complete and validated in the user's local working tree.
 
 ---
 
@@ -285,13 +285,104 @@ Introduced the `sep_adapter` module as the single boundary between project code 
 
 ---
 
+## Phase 14 — Data-movement bridge
+
+**Status:** COMPLETE
+
+Introduced `HyTMSEPBridge`: the first real construction of the vendored `sepgraph::engine::Engine<...>`, driven from a project-owned `CSRGraph`. Fed the vendored engine through a temporary-file injection path (forced by the vendored `Context<Algo>` constructor), ran PageRank and SSSP end-to-end to convergence, and gathered results back to the project side.
+
+### Deliverables
+
+- `include/sep_adapter/sep_algorithm_mapper.hpp` + `src/sep_adapter/sep_algorithm_mapper.cpp` — project-owned `SEPAlgorithm` enum (`IterativeScheme`, `TraversalScheme`), `to_string` / `from_string`, injective mapping to/from `sepgraph::policy::AlgoType` (`ITERATIVE_SCHEME`, `TRAVERSAL_SCHEME`). **Bijection** over the two vendored enumerators.
+- `include/sep_adapter/sep_host_graph_adapter.hpp` + `src/sep_adapter/sep_host_graph_adapter.cpp` — `SEPGraphFile` (move-only, RAII temp-file handle) and `write_sep_graph_file(const CSRGraph&, const SEPGraphFileConfig&)`. Serializes project `CSRGraph` to the "market_big" text layout (one `src dst [weight]` per line, 0-indexed, no header) — the only format whose vendored parser, `ReadGraphMarket_bigdata`, is implemented. Other parsers (`ReadGraph`, `ReadGraphGR`, `ReadGraphMarket`) are stubs in this snapshot.
+- `include/sep_adapter/hytm_sep_bridge.hpp` + `src/sep_adapter/hytm_sep_bridge.cpp` — public `HyTMSEPBridge` class (plain C++), `SEPBridgeAlgorithm` enum (`PageRank`, `SSSP`), `SEPBridgeConfig`, `SEPBridgeMetrics`, `SEPBridgeResult`. Move-only, single-shot `run()`. Auto-computes `FLAGS_SEGMENT` if config left at 0.
+- `src/sep_adapter/detail/engine_runner.hpp` — private plain-C++ header. Declares `detail::run_engine(const EngineRunRequest&) -> EngineRunOutput`. The bridge delegates all CUDA work to this function.
+- `src/sep_adapter/sep_engine_adapter_impl.cu` — the only Phase 14 translation unit that includes `<framework/framework.cuh>`. Compiled as LANGUAGE CUDA. Contains the PageRank and SSSP engine constructors, gflags save/restore, `ensure_graph_datum_bitmaps()` workaround, result gathering.
+- `src/sep_adapter/apps/pagerank_app.hpp` — project-owned `hytgraph::sep_adapter::apps::PageRank<TValue, TBuffer, TWeight, UnusedData...>` deriving from `sepgraph::api::AppBase`. Ports the vendored `hybrid_pr.cu` app.
+- `src/sep_adapter/apps/sssp_app.hpp` — project-owned `hytgraph::sep_adapter::apps::SSSP<TValue, TBuffer, TWeight, UnusedData...>` deriving from `sepgraph::api::AppBase`. Ports the vendored `hybrid_sssp.cu` app.
+- `src/sep_adapter/sep_flags.cpp` — standalone plain-C++ translation unit. Defines every gflag the vendored headers `DECLARE` (`graphfile`, `format`, `weight_num`, `SEGMENT`, `n_stream`, `max_iteration`, `hybrid`, `residence`, `priority_a`, `alpha`, `beta`, `edge_factor`, `lb_push`, `lb_pull`, `undirected`, `wl_sort`, `wl_unique`, `wl_alloc_factor`, `block_size`, `prio_delta`, `check`, `verbose`, `trace`, `stats`, `estimate`, `output`, `out_wl`, `gen_*`). Kept separate from the `.cu` to avoid gflags duplicate-declaration errors.
+- `tests/sep_adapter_bridge_tests.cpp` — Phase 14 test suite.
+- Root `CMakeLists.txt` — Phase 14 additions (marked `# === PHASE 14 BEGIN/END ===`):
+  - New static library `hytgraph_sep_utils` over the vendored `src/utils/{utils,parser,to_json}.cpp`.
+  - `hytgraph_sep_utils` linked into `hytgraph_runtime`.
+  - New sources `sep_host_graph_adapter.cpp`, `sep_flags.cpp`, `hytm_sep_bridge.cpp`, `sep_engine_adapter_impl.cu`.
+  - `sep_engine_adapter_impl.cu` marked LANGUAGE CUDA.
+  - `CUDA::cudart` and `CUDA::cuda_driver` linked PRIVATE.
+  - `src/` added to `hytgraph_runtime`'s private include path (for `src/sep_adapter/{detail,apps}`).
+  - New test target `hytgraph_sep_adapter_bridge_tests` (plain C++, links `hytgraph_runtime`).
+
+### Exit Criterion Verification
+
+- One out-of-core iteration runs through the vendored engine for PageRank and SSSP ✅
+- All Phase 0–13 tests still pass unchanged ✅
+- Full ctest suite: **7/7** (`unit_tests`, `algorithm_tests`, `cuda_algorithm_tests`, `sep_graph_link_smoke`, `sep_adapter_tests`, `sep_adapter_bridge_tests`, `experiment_runner_smoke`)
+- No `sepgraph::` or `groute::` symbol appears outside `src/sep_adapter/` and `third_party/hytgraph_sep/` ✅
+
+### Deviations from MASTER_PLAN.md §Phase 14
+
+| #   | Plan says                                                                                   | Actual                                                                                           | Reason                                                                                                                                                                                                                                 |
+| --- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E1  | `execute_partition(active_vertices, engine)` drives one iteration                           | `HyTMSEPBridge::run()` runs the vendored engine to convergence in one call; no per-partition API | The vendored `Engine` has no public per-partition entry point. `Start()` is the only public execution method and it runs an internal `while (!convergence)` loop. Per-partition engine selection is done inside `PolicyDecisionMaker`. |
+| E2  | "Map `row_offsets` → `groute::graphs::host::CSRGraph::offsets`, `column_indices` → `edges`" | The bridge serializes the CSR to a temporary file and lets the vendored engine load it           | `utils::traversal::Context<Algo>` calls `GetCachedGraph(FLAGS_graphfile, ...)` inside its constructor. There is no public API to inject an in-memory host graph.                                                                       |
+| E3  | "Reuse the engine across partitions; only swap the GraphDatum input"                        | Not applicable — the vendored engine owns its own `GraphDatum` and never exposes it for swapping | `Engine::m_graph_datum` is private. The engine internally iterates segments.                                                                                                                                                           |
+| E4  | Bridge takes `SEPExecutionDriver&` + `CSRGraph&`                                            | Bridge takes `SEPBridgeAlgorithm` + `const CSRGraph&` + `SEPBridgeConfig`                        | The Phase 13 `SEPExecutionDriver` interface is incompatible with the vendored `Engine`'s shape. See Known Issue #26.                                                                                                                   |
+| E5  | `include/sep_adapter/sep_graph_datum_adapter.hpp` + `src/.../*.cpp`                         | Replaced by `sep_host_graph_adapter.hpp` + `.cpp`                                                | Building a `GraphDatum` directly is impossible; we build the temp file instead.                                                                                                                                                        |
+| E6  | Neighbor shifting applied when engine is ExpTMFilter / ExpTMCompaction                      | Not implemented in Phase 14                                                                      | The vendored engine handles shifting internally during its segment loop.                                                                                                                                                               |
+| E7  | Sort and deduplicate the active set once per step                                           | Not implemented in Phase 14                                                                      | The bridge does not see the active set; the vendored engine manages it.                                                                                                                                                                |
+
+### Vendored tree edits (authorized, documented)
+
+**One edit** was applied to the vendored tree in Phase 14, authorized by the repository owner in the Phase 14 chat. It is recorded in `docs/original_hytgraph_build_notes.md`.
+
+```
+File:    third_party/hytgraph_sep/include/framework/variants/sync_push_dd.cuh
+Line:    ~189 in RelaxCTADB
+Before:  if (tid < work_size) { ... work_source.get_work(tid); ... }
+After:   if (i < work_size)   { ... work_source.get_work(i);   ... }
+Reason:  The thread-id guard `tid < work_size` was incorrect for a
+         grid-stride loop over work items. Every thread with
+         tid >= work_size left np_local.size == 0 and tripped
+         CTAWorkSchedulerNew::schedule's assert(np_local.size > 0).
+         The loop variable `i` is the correct work-item index.
+Class:   Correctness bug in the vendored snapshot, independent of
+         paper semantics.
+```
+
+### Project-side workarounds (no vendored edits)
+
+1. **`ensure_graph_datum_bitmaps(GraphDatum&)`** in `sep_engine_adapter_impl.cu`.
+   The vendored `GraphDatum` constructor never allocates its four `Bitmap` members (`m_wl_bitmap_in`, `m_wl_bitmap_out_high`, `m_wl_bitmap_out_low`, `m_wl_bitmap_middle`). The vendored `Engine` never calls the `RebuildBitmapWorklist` helper that would size them (it is dead code in this snapshot). `RunSyncPushDDB` reads `m_wl_bitmap_out_high.DeviceObject()`, which asserts `m_size > 0`. We size all four from our side, after `LoadGraph()` and before `InitGraph()`, using only the public `CompressedBitmap` API (`CompressedBitmap(nnodes)` + `Swap`).
+
+2. **`NDEBUG` defined for `sep_engine_adapter_impl.cu` only** via CMake `set_source_files_properties(...)`.
+   The vendored engine contains `assert(np_local.size > 0)` in `cta_scheduler_hybrid.cuh`, which fires on active vertices whose PageRank buffer falls below the app's `kPageRankEpsilon` threshold. This is a legitimate runtime state, not an error. The assert is guarded by `NDEBUG`; the original HyTGraph samples compiled Release, so it never fired upstream. Defining `NDEBUG` for our `.cu` (which includes the header transitively) suppresses it without affecting any other target.
+
+### Build-time corrections applied during Phase 14
+
+- `sep_flags.cpp` was originally embedded in `sep_engine_adapter_impl.cu`. Moved to a standalone plain-C++ TU after the vendored `graph_datum.cuh` was found to `DECLARE_int32(wl_alloc_factor)` — the `.cu`'s own `DEFINE_int32(wl_alloc_factor, ...)` collided.
+- `DEFINE_int32(wl_alloc_factor, ...)` was corrected to `DEFINE_double(wl_alloc_factor, 1.0, ...)` after the linker reported `undefined reference to fLD::FLAGS_wl_alloc_factor`. gflags' internal per-type packing (`fLD` = double, `fLI` = int32) revealed the type mismatch.
+- `DEFINE_double(beta, 0.40, ...)` was added after `PolicyDecisionMaker::GetNextPolicy` reported `undefined reference to fLD::FLAGS_beta`.
+- `CUDA::cuda_driver` was added alongside `CUDA::cudart` after `HandleError` reported `undefined reference to cuGetErrorString`.
+- `hytgraph_sep_utils` (vendored `utils.cpp`, `parser.cpp`, `to_json.cpp`) was added as a static library after `Context<Algo>` reported `undefined reference to GetCachedGraph` / `CleanupGraphs`.
+- The bridge auto-computes `FLAGS_SEGMENT` when config leaves it at 0. `Engine::LoadGraph` does not clamp `FLAGS_SEGMENT` to the actual non-empty segment count; a 5-vertex test graph with `FLAGS_SEGMENT = 32` caused an OOM inside `GraphDatum`'s constructor.
+- The `include/sep_adapter/*.hpp` files that take a `CSRGraph` parameter gained `using hytgraph::graph::CSRGraph;` after the test compile showed `'CSRGraph' does not name a type` (`CSRGraph` lives in `namespace hytgraph::graph`, not at global or `hytgraph` scope).
+
+### Notes
+
+- **The vendored engine is not per-partition.** `Engine::Start()` owns the whole run — segmentation, cost-based engine selection (`PolicyDecisionMaker::GetNextPolicy`), task combining (`CombineTask`), and convergence. The paper's HyTM mechanisms (three transfer engines, task combining, contribution-driven scheduling) are all dispatched inside `Start()`. The bridge is a feeder, not a per-partition orchestrator.
+- **`AppBase` is only reachable via full vendored include.** Both app headers (`pagerank_app.hpp`, `sssp_app.hpp`) derive from `sepgraph::api::AppBase`, whose definition lives in `<framework/variants/api.cuh>`. They are placed under `src/sep_adapter/apps/` (private, not installed), not under `include/sep_adapter/`, to preserve the public boundary.
+- **Phase 14 exposes no public `sepgraph::` symbol.** `sep_host_graph_adapter.hpp` and `hytm_sep_bridge.hpp` include only project-owned and standard-library headers. The `detail::EngineRunRequest` / `EngineRunOutput` types live under `src/sep_adapter/detail/`.
+- **Numerical validation is deferred.** `tests/sep_adapter_bridge_tests.cpp` verifies structural facts: `valid()`, file existence, correct result vector sizes, distance values on a unit-weight line graph (0..N-1), and single-shot `run()`. It does **not** compare against the project's CPU reference. This is Phase 15 work.
+- **Test graph size is 100 vertices.** Vendored minimum-size behavior was observed at 5 vertices (`CompressedBitmap` assertion fire before any kernel ran) and vanished once we size the bitmaps ourselves. The current tests exercise the temp-file path, the parser, engine construction, and result gathering with a 100-vertex line graph.
+
+---
+
 # Planned Future Phases (not yet started)
 
 | Phase    | Name                             | Status       |
 | -------- | -------------------------------- | ------------ |
 | Phase 13 | Adapter layer (no data movement) | **COMPLETE** |
-| Phase 14 | Data-movement bridge             | READY        |
-| Phase 15 | Task combining bridge            | NOT STARTED  |
+| Phase 14 | Data-movement bridge             | **COMPLETE** |
+| Phase 15 | Task combining bridge            | READY        |
 | Phase 16 | Contribution scheduling bridge   | NOT STARTED  |
 | Phase 17 | VCGC read path                   | NOT STARTED  |
 | Phase 18 | VCGC refresh                     | NOT STARTED  |
@@ -331,7 +422,7 @@ Current transfer sizes are logical/reference byte counts. They are not claimed t
 
 ## 7. CUDA Execution
 
-The transfer-engine, task-combination, hub-sorting, and contribution-scheduling layers remain reference/modeling or preparation components until integrated with the vendored SEP-Graph execution layer.
+The transfer-engine, task-combination, hub-sorting, and contribution-scheduling layers remain reference/modeling or preparation components until integrated with the vendored SEP-Graph execution layer. Phase 14 exercised the vendored engine end-to-end but did not connect the Phase 8 cost model's decisions to the vendored `PolicyDecisionMaker`.
 
 ## 8. Zero-Copy Mapping
 
@@ -347,7 +438,7 @@ A reproducible paper-specific CPU compaction throughput measurement is not curre
 
 ## 11. Task Combination
 
-The current TaskCombiner is an executable-task planning layer. It does not yet execute grouped tasks, overlap transfers and computation, or implement the paper's complete scheduling pipeline.
+The current TaskCombiner is an executable-task planning layer. It does not yet execute grouped tasks, overlap transfers and computation, or implement the paper's complete scheduling pipeline. The vendored engine's own `CombineTask()` (a distinct, internal mechanism) is what runs during Phase 14's `Start()` calls.
 
 ## 12. Task Ordering for Globally Combined Engines
 
@@ -396,9 +487,18 @@ It does not yet:
 
 The available paper material does not specify a complete formal SSSP contribution equation. The current implementation therefore uses tentative-distance improvement supplied by the execution layer. This is explicitly an engineering approximation.
 
-## 20. Vendored Code Read-Only Rule
+## 20. Vendored Code Read-Only Rule (Amendment)
 
-The `third_party/hytgraph_sep/` directory is read-only from the project's perspective. No project code outside `include/sep_adapter/` and `src/sep_adapter/` may include vendored headers. No edits to vendored source files are permitted; if a build fix is required, it must be applied identically to `docs/original_hytgraph_build_notes.md` and reflected in the vendored tree only as documented.
+The `third_party/hytgraph_sep/` directory is **read-only by default**. No project code outside `include/sep_adapter/` and `src/sep_adapter/` may include vendored headers.
+
+**Amendment (Phase 14):** If a vendored file contains a defect that blocks Phase work, the repository owner may authorize a targeted edit. Any such edit must be:
+
+1. Authorized explicitly in the phase chat.
+2. Applied minimally — no reformatting, no cleanup.
+3. Recorded in `docs/original_hytgraph_build_notes.md` with file, line, before, after, and reason.
+4. Reflected in this file under the phase's "Vendored tree edits" subsection.
+
+Phase 14 applied one such edit: `sync_push_dd.cuh` `tid` → `i` (see above).
 
 ## 21. Phase 12 Integration Notes
 
@@ -406,9 +506,7 @@ The vendored `third_party/hytgraph_sep/CMakeLists.txt` is not executed. `hytgrap
 
 ## 22. SEP Adapter Has No Engine Construction in Phase 13
 
-The `SEPEngineAdapter` in Phase 13 does not construct a vendored `sepgraph::engine::Engine`. The engine's constructor calls `cudaGetDeviceProperties` and `CreateStream`, which would fail on any build environment without CUDA. Construction is deferred to Phase 14.
-
-`execute_step()` returns `DEFERRED` in Phase 13 because the vendored engine exposes no single-step API. The engine's only public execution entry point is `Start()`, which runs the algorithm to convergence in an internal `while (!convergence)` loop. A project-side step scheduler will be introduced in Phase 14.
+The `SEPEngineAdapter` in Phase 13 does not construct a vendored `sepgraph::engine::Engine`. Phase 14 bypasses `SEPEngineAdapter` entirely; see Known Issue #26.
 
 ## 23. SEPVariant ↔ AlgoVariant Is Injective, Not Bijective
 
@@ -418,20 +516,92 @@ MASTER_PLAN.md §Phase 13 says "mapping is bijective with `sepgraph::common::Alg
 
 ## 24. Forward Declaration of a Vendored Type in a Project Header
 
-`include/sep_adapter/sep_variant_mapper.hpp` forward-declares `sepgraph::common::AlgoVariant` so that the two internal `detail::` translation functions can be declared without including any vendored header. This is a technical deviation from the letter of the Phase 12 leak check ("no `sepgraph::` or `groute::` symbol appears outside `third_party/hytgraph_sep/` and the smoke test") but preserves its spirit: no member, base class, or enumerator of the vendored type is visible; the type remains incomplete in every translation unit that does not include `<framework/common.h>`.
-
-If a stricter interpretation is required in a future phase, move the two `detail::` declarations to a private header under `src/sep_adapter/` that is not installed.
+`include/sep_adapter/sep_variant_mapper.hpp` forward-declares `sepgraph::common::AlgoVariant` so that the two internal `detail::` translation functions can be declared without including any vendored header. This is a technical deviation from the letter of the Phase 12 leak check but preserves its spirit: no member, base class, or enumerator of the vendored type is visible. Phase 14's public headers (`sep_host_graph_adapter.hpp`, `hytm_sep_bridge.hpp`) forward-declare no vendored types at all.
 
 ## 25. sep_variant_mapper.cpp Is Conditionally Compiled
 
-`src/sep_adapter/sep_variant_mapper.cpp` includes `<framework/common.h>`, whose include path exists only when `HYTGRAPH_WITH_SEP_GRAPH=ON`. It is therefore compiled only in ON builds. In OFF builds, `detail::to_vendored` and `detail::from_vendored` are declared but undefined. Nothing in Phase 13 calls them.
+`src/sep_adapter/sep_variant_mapper.cpp` includes `<framework/common.h>`, whose include path exists only when `HYTGRAPH_WITH_SEP_GRAPH=ON`. It is therefore compiled only in ON builds. In OFF builds, `detail::to_vendored` and `detail::from_vendored` are declared but undefined. Nothing in Phase 13 or 14 calls them.
 
-Phase 14 must resolve this. Two options:
+Resolution deferred to Phase 20, which requires the OFF-build `FullPipeline` path. At that time, add `src/sep_adapter/sep_variant_mapper_stub.cpp` (compiled in OFF builds) returning `std::nullopt` / `INVALID_CONFIG`.
 
-1. Keep them behind the same `#if` and never call them in OFF builds.
-2. Add a stub implementation in a new file (`src/sep_adapter/sep_variant_mapper_stub.cpp`) compiled in OFF builds, returning failure / `std::nullopt`.
+## 26. Phase 13 `SEPExecutionDriver` Is Not Used in Phase 14
 
-Option 2 is cleaner.
+The Phase 13 `SEPExecutionDriver` abstract interface expects a per-step design (`initialize()`, `execute_step()`, `synchronize()`). The vendored `sepgraph::engine::Engine` does not fit this shape:
+
+- `Start()` is the only public execution method and runs to convergence.
+- The engine owns its own `GraphDatum`, host CSR, and segmentation.
+- There is no API to inject a per-partition payload.
+
+Phase 14 therefore introduces `HyTMSEPBridge` as the driving interface for the vendored engine. Phase 13's `SEPExecutionDriver`, `SEPEngineAdapter`, and `NullSEPDriver` remain in the tree and compile, but nothing in Phase 14 uses them. Their eventual disposition (reconciliation vs retirement) is deferred.
+
+## 27. Vendored Utility Sources Must Be Compiled
+
+The vendored `utils.cpp` (defines `GetCachedGraph`, `CleanupGraphs`), `parser.cpp` (defines the graph-file parsers), and `to_json.cpp` (defines `JsonWriter`) must be linked into `hytgraph_runtime` in any configuration that reaches the vendored `Engine`. Phase 14 adds them via a static library `hytgraph_sep_utils`. Omitting this library produces link errors inside the vendored `Context<Algo>` constructor.
+
+## 28. Vendored Parser Stubs
+
+Three of the four vendored graph-file parsers (`ReadGraph`, `ReadGraphGR`, `ReadGraphMarket`) are stubs in the snapshot — they call `CreateGraph()` and return an empty graph. Only `ReadGraphMarket_bigdata` (flag `"market_big"`) is functional. Phase 14 uses it exclusively.
+
+## 29. `ReadGraphMarket_bigdata` Highest-Vertex Precondition
+
+The vendored `ReadGraphMarket_bigdata` derives `nvtxs` from `max(src, dst) + 1` but only resizes its `xadj` scratch array when it sees a higher `src`. If the highest-numbered vertex never appears as a source, the parser overruns. `write_sep_graph_file` therefore rejects graphs where `out_degree(num_vertices - 1) == 0` and returns `std::nullopt`. Project tests add a self-loop on the top vertex of line graphs to satisfy this.
+
+## 30. Vendored `GraphDatum` Does Not Allocate Its Bitmaps
+
+`sepgraph::graphs::GraphDatum`'s constructor allocates node value datums, node buffer datums, worklist queues, and sampling arrays — but not the four `Bitmap` members `m_wl_bitmap_in`, `m_wl_bitmap_out_high`, `m_wl_bitmap_out_low`, `m_wl_bitmap_middle`. Nothing in the vendored lifecycle sizes them; `RebuildBitmapWorklist` in `algo_variants.cuh` is dead code in this snapshot. `RunSyncPushDDB` reads `m_wl_bitmap_out_high.DeviceObject()`, which asserts `m_size > 0`.
+
+Phase 14 works around this with `ensure_graph_datum_bitmaps()` in `sep_engine_adapter_impl.cu`, which sizes all four bitmaps after `LoadGraph()` and before `InitGraph()`. This is a project-side workaround; the vendored tree was not edited for it.
+
+## 31. `NDEBUG` Required for the Engine Translation Unit
+
+The vendored engine contains `assert(np_local.size > 0)` in `cta_scheduler_hybrid.cuh`. It fires on any active vertex whose `CombineValueBuffer` returns `pair.second == false` — a legitimate PageRank state (`buffer <= kPageRankEpsilon`). The original HyTGraph samples compiled Release, so the assert never fired upstream.
+
+Phase 14 defines `NDEBUG` for `sep_engine_adapter_impl.cu` only, via `set_source_files_properties(... COMPILE_DEFINITIONS "NDEBUG")`. **Consequence:** asserts anywhere in the vendored tree reached by this TU are now silent. Correctness must be validated by numerical comparison (Phase 15) rather than by assertion.
+
+## 32. Vendored Engine's `LoadBalancing::NONE` Is Not Implemented in `RelaxCTADB`
+
+`RelaxCTADB` in `sync_push_dd.cuh` dispatches on `LoadBalancing`:
+
+- `COARSE_GRAINED` — implemented
+- `FINE_GRAINED` — implemented (vendored default)
+- `HYBRID` — implemented
+- `NONE` — falls through to `default: assert(false);`
+
+Phase 14 uses the vendored default (`FINE_GRAINED`). `FLAGS_lb_push` is not overridden.
+
+## 33. Phase 14 Tests Are Structural, Not Numerical
+
+`tests/sep_adapter_bridge_tests.cpp` verifies:
+
+- `SEPGraphFile` factory: empty graph → `nullopt`; valid graph → file exists, correct flag values; weighted vs unweighted; isolated top vertex → `nullopt`; move semantics.
+- `SEPBridgeAlgorithm` round-trip string mapping.
+- `HyTMSEPBridge` construction: valid and invalid inputs.
+- PageRank run: correct result vector size, all values finite and non-negative, single-shot `run()` behaviour.
+- SSSP run: correct result vector size, distance values 0..N-1 on a unit-weight line graph (if the source distance is initialized).
+
+It does **not** compare against the project's CPU reference. Numerical validation is Phase 15 work.
+
+## 34. Phase 14 `SEPBridgeMetrics` Is Partially Populated
+
+`SEPBridgeMetrics.nnodes` and `.nedges` are read from `engine.GetGraphDatum()`. The remaining fields (`current_round`, `explicit_num`, `zerocopy_num`, `compaction_num`, `time_*`) are left at 0, because `sepgraph::engine::Engine::m_running_info` has no public accessor. Populating them requires either a vendored accessor or a project-side wrapper; deferred to Phase 15 or later.
+
+## 35. Vendored `PolicyDecisionMaker` Runs Independently of Phase 8
+
+The vendored engine performs its own cost-based engine selection inside `Start()`, via `sepgraph::policy::PolicyDecisionMaker`. This selection is **not** the Phase 8 HyTM cost model. Phase 8's decisions (`TransferEngineType` per logical partition) are not connected to the vendored `PolicyDecisionMaker` in Phase 14. Reconciliation is Phase 15+ work.
+
+## 36. Temp-File Injection Path
+
+The vendored `Context<Algo>` constructor reads `FLAGS_graphfile` and `FLAGS_format` and calls `GetCachedGraph`. There is no public API for in-memory graph injection. Phase 14 serializes the project `CSRGraph` to a temporary text file (Market-Big format: one `src dst [weight]` per line, 0-indexed, whitespace-separated, no header), sets `FLAGS_graphfile` to that path and `FLAGS_format = "market_big"`, and removes the file when `SEPGraphFile` destructs.
+
+Consequences:
+
+- `write_sep_graph_file` scales and rounds `float` project weights to `uint32` vendored weights. Callers must set `weight_scale` to preserve required precision.
+- Large graphs produce large text files. Binary format support is deferred.
+- The temp file must remain on disk for the entire engine run.
+
+## 37. Phase 14 Vendored Edit — `sync_push_dd.cuh`
+
+See "Vendored tree edits" under Phase 14 above. The edit is authorized and documented in `docs/original_hytgraph_build_notes.md`.
 
 ---
 
@@ -483,7 +653,7 @@ Phase 12 is complete and validated.
 
 - `hytgraph_sep_lib` is defined and links.
 - `hytgraph_sep_link_smoke_test` compiles, links, and passes.
-- The full ctest suite passes: 5/5 (`unit_tests`, `algorithm_tests`, `cuda_algorithm_tests`, `sep_graph_link_smoke`, `experiment_runner_smoke`).
+- The full ctest suite passes: 5/5.
 - Symbol-leakage grep checks are clean.
 - The vendored tree is byte-identical to the original clone.
 
@@ -491,13 +661,21 @@ Phase 12 is complete and validated.
 
 Phase 13 is complete and validated in the user's local working tree.
 
-- `hytgraph_runtime` now includes `src/sep_adapter/*.cpp`.
+- `hytgraph_runtime` includes `src/sep_adapter/*.cpp`.
 - `HYTGRAPH_WITH_SEP_GRAPH` is propagated to C++ as a numeric macro.
-- The full ctest suite passes: 6/6 (`unit_tests`, `algorithm_tests`, `cuda_algorithm_tests`, `sep_graph_link_smoke`, `sep_adapter_tests`, `experiment_runner_smoke`).
+- The full ctest suite passes: 6/6.
 - `sep_adapter_tests` reports **621 checks, 0 failures**.
 - All Phase 0–12 tests still pass unchanged.
-- The vendored tree is byte-identical to the original clone.
-- All seven previously-inferred `AlgoVariant::SYNC_*` / `ASYNC_*` names compiled without adjustment. **No `VENDOR-CHECK` remains in Phase 13 code.**
+
+## Phase 14 Validation
+
+Phase 14 is complete and validated in the user's local working tree.
+
+- `hytgraph_runtime` now includes `sep_host_graph_adapter.cpp`, `sep_flags.cpp`, `hytm_sep_bridge.cpp`, `sep_engine_adapter_impl.cu`.
+- The full ctest suite passes: **7/7** (`unit_tests`, `algorithm_tests`, `cuda_algorithm_tests`, `sep_graph_link_smoke`, `sep_adapter_tests`, `sep_adapter_bridge_tests`, `experiment_runner_smoke`).
+- `sep_adapter_bridge_tests` executes PageRank and SSSP end-to-end through the vendored `Engine`.
+- All Phase 0–13 tests still pass unchanged.
+- One vendored edit applied and documented (`sync_push_dd.cuh` `tid` → `i`).
 
 ## Superseded Work
 
@@ -507,7 +685,7 @@ The earlier draft Phase 12 ("SEP-Graph Foundation" — project-local abstraction
 
 # Current Milestone
 
-    M14 — HyTGraph ↔ SEP data-movement bridge
+    M15 — Task Combining with SEP worklists
 
 Status:
 
@@ -517,7 +695,7 @@ Status:
 
 # Next Milestone
 
-    M15 — Task Combining with SEP worklists
+    M16 — Contribution scheduling with SEP
 
 Status:
 
@@ -527,41 +705,47 @@ Status:
 
 # NEXT TASK
 
-**Next task:** Phase 14 — Data-movement bridge.
+**Next task:** Phase 15 — Task combining bridge.
 
-Phase 14 feeds the project-owned CSR graph and active-vertex set into the vendored SEP-Graph engine through a project-owned bridge, and introduces the first real engine construction.
+Phase 15 feeds `TaskCombiner` output into the vendored worklist. Per MASTER_PLAN.md §Phase 15, this phase introduces:
 
-Phase 14 deliverables:
+1. `include/sep_adapter/sep_task_combiner.hpp` + `src/sep_adapter/sep_task_combiner.cpp` — `SEPTask` struct; `combine_to_sep_tasks(...)` translating project `CombinedTask`s into vendored worklist units.
+2. `include/sep_adapter/sep_worklist_adapter.hpp` + `src/sep_adapter/sep_worklist_adapter.cpp` — `SEPWorklistAdapter` with pimpl; loads active vertex sets into `groute::worklist`.
 
-1. `include/sep_adapter/sep_algorithm_mapper.hpp` + `src/sep_adapter/sep_algorithm_mapper.cpp` — project-owned mapping from `SEPAlgorithm` to the vendored `policy::AlgoType`.
-2. `include/sep_adapter/sep_graph_datum_adapter.hpp` + `src/sep_adapter/sep_graph_datum_adapter.cpp` — build a `sepgraph::graphs::GraphDatum` from a project-owned `CSRGraph` plus an active-vertex set. pimpl so no vendored symbol leaks into public headers.
-3. `include/sep_adapter/hytm_sep_bridge.hpp` + `src/sep_adapter/hytm_sep_bridge.cpp` — `HyTMSEPBridge` accepting a `SEPExecutionDriver&` and a `CSRGraph&`; `execute_partition(active_vertices, engine)` drives one iteration.
-4. `src/sep_adapter/sep_engine_adapter_impl.cpp` (new, CUDA-enabled) — the actual engine construction. Either a `.cpp` compiled with CUDA support, or a `.cu` file. **This file will include `<framework/framework.cuh>`.**
-5. Update `CMakeLists.txt` to add the new sources, and to compile `sep_engine_adapter_impl.cpp` as a CUDA source (or as a plain C++ source if the header is `.cuh`-compatible without kernel launches — this is a decision to make during Phase 14, not now).
-6. Update `tests/sep_adapter_tests.cpp` to add a Phase 14 test section, or add a new `tests/sep_adapter_bridge_tests.cpp` if the bridge needs its own test target.
-7. Correct the two Phase 13 documentation bugs: the "bijective" comment in `sep_variant_mapper.hpp`; the deferred OFF-build stub decision (Known Issue #25).
+**Prerequisite for Phase 15 (must be resolved before writing code):**
 
-**Prerequisite for Phase 14 (must be resolved before writing code):**
+The Phase 14 findings change the Phase 15 shape substantially. Because the vendored `Engine::Start()` performs its own `CombineTask()` internally, the plan's "feed `TaskCombiner` output into the vendored worklist" is not reachable from outside the engine. Phase 15 must decide between:
 
-- Read `framework/graph_datum.cuh` and confirm the `GraphDatum` constructor signature and the semantics of `m_current_round`, `m_wl_array_in_seg`, and `subgraphedges`.
-- Read `framework/variants/api.cuh` and `framework/variants/driver.cuh` to understand `RunSyncPushDDB` and the other driver functions the engine calls internally.
-- Decide whether Phase 14 builds `sep_engine_adapter_impl.cpp` as C++ or CUDA. The header `framework.cuh` uses `<<<>>>` syntax internally (kernel launches) in template bodies that are only instantiated when called; whether a `.cpp` can include it without nvcc depends on whether the template bodies reach `kernel::*` calls before instantiation. **Test this before writing the bridge.**
+- **(A) Reconciliation:** extend `HyTMSEPBridge` to expose the engine's own combined-task structure (via `TRunningInfo` counters or a project-side accessor), and validate `TaskCombiner` output against it. Delivers a measured "logical vs executable task count" number without needing to drive the vendored worklist.
+- **(B) Parallel worklist:** introduce `SEPWorklistAdapter` as a standalone project-owned wrapper around `groute::Queue<index_t>` for later phases (16, 19) that need external worklist manipulation.
 
-Exit criteria for Phase 14:
+Both may be appropriate; they are not exclusive. The chat for Phase 15 must resolve this before writing any file, and record the decision here.
 
-- One out-of-core iteration runs through the vendored engine for PageRank and SSSP.
-- All three transfer engines give identical results on a small graph.
-- No `sepgraph::` symbol is visible outside `src/sep_adapter/` and the vendored tree itself.
-- All Phase 0–13 tests still pass.
+**Phase 15 must also deliver:**
 
-**Time-box: 3–4 days.** This is the first phase with real CUDA dependencies. Expect at least one integration issue with the vendored headers.
+- Numerical validation of PageRank and SSSP against the project's CPU reference (`src/algorithms/pagerank.cpp`, `src/algorithms/sssp.cpp`) on a shared small graph, within a documented tolerance.
+- If numerical validation is not feasible in Phase 15, the reason must be documented and the work re-scheduled.
+
+**Time-box: 2–3 days.** Phase 14's integration discoveries mean this phase is mostly decision + validation, not new plumbing.
 
 ---
 
-# Phase 14 Open Questions (to resolve before starting)
+# Phase 15 Open Questions (to resolve before starting)
 
-1. **Does `framework/framework.cuh` compile as plain C++?** Phase 12's smoke test verified that `framework/common.h` compiles as plain C++. `framework.cuh` is a much larger header and includes `framework/variants/driver.cuh`, which contains kernel-launch syntax. Answer by attempting to include it from a throwaway `.cpp`; if it fails, Phase 14 must introduce a `.cu` file for engine construction.
+1. **Reconcile or parallel worklist?** See "Prerequisite for Phase 15" above. Recommendation: **(A) Reconciliation first**, because the paper's "task count drops by ≥3×" exit criterion is a planner-vs-runtime comparison, and the vendored engine already produces the runtime number. **(B)** can be deferred to Phase 16 (contribution scheduling) where external worklist manipulation is genuinely required.
 
-2. **Which apps does Phase 14 target first?** MASTER_PLAN.md §5 lists PageRank, SSSP, BFS, CC. The vendored SEP-Graph repo has `apps/pr`, `apps/sssp`, `apps/bfs`, `apps/cc` (not copied in Phase 12). Phase 14 can either implement project-owned apps that match SEP-Graph's `TAppImpl` contract, or copy the vendored app headers into `third_party/hytgraph_sep/` as an additive operation. The plan does not specify. **Recommendation: implement project-owned apps under `include/sep_adapter/apps/`** — the paper's algorithms are simple enough and the boundary rule favors project-owned code.
+2. **What numerical tolerance is correct?** The vendored engine runs to convergence with its own internal epsilon. The project's CPU reference has its own tolerance. For PageRank, a reasonable standard is `1e-3` absolute per vertex. For SSSP on integer weights, `0` tolerance is achievable and should be required. Confirm or override.
 
-3. **Where does the graph datum get built?** Two possibilities: (a) `sep_graph_datum_adapter.cpp` builds it in one shot; (b) the bridge builds it incrementally per partition. MASTER_PLAN.md §Phase 14 says "Reuse the engine across partitions; only swap the GraphDatum input." This implies (a) builds the datum once, and the bridge reloads it per partition.
+3. **Which graph should Phase 15 validate against?** A hand-built graph small enough to reason about (≤100 vertices, ≤200 edges), with known PageRank and SSSP ground truth. The Phase 14 line graph is not sufficient — its PageRank has no closed form and its SSSP has no branching. A star or small random graph with degree variation is preferable.
+
+4. **Does `TaskCombiner` need to be called at all in Phase 15?** If Option A (reconciliation) is chosen, yes — to produce the "logical partitions" number that we compare against `TRunningInfo.explicit_num + zerocopy_num + compaction_num`. If Option B (parallel worklist), no.
+
+---
+
+# Phase 14 Open Questions (resolved)
+
+1. **Does `framework/framework.cuh` compile as plain C++?** **Resolved: no.** `RunSyncPushDDB` and the other variant functions use `<<<>>>` syntax in template bodies that are instantiated. `sep_engine_adapter_impl.cu` is compiled as `LANGUAGE CUDA`.
+
+2. **Which apps does Phase 14 target first?** **Resolved: project-owned.** `src/sep_adapter/apps/pagerank_app.hpp` and `src/sep_adapter/apps/sssp_app.hpp` derive from `sepgraph::api::AppBase`. BFS and CC are deferred.
+
+3. **Where does the graph datum get built?** **Resolved: neither.** The vendored engine builds its own `GraphDatum`. The bridge writes a temp file that the vendored `Context<Algo>` reads. See Known Issue #36.

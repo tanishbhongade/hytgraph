@@ -196,7 +196,7 @@ namespace sepgraph
         
                             if (tid < work_size)
                             {
-                                    const index_t node = work_source.get_work(tid);
+                                    const index_t node = work_source.get_work(i);
 				                    //printf("node:%d\n",node);
                                     const auto pair = app_inst.CombineValueBuffer(node,
                                                                                   node_value_datum.get_item_ptr(node),

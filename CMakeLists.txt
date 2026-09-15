@@ -227,6 +227,33 @@ if(HYTGRAPH_WITH_SEP_GRAPH)
     message(STATUS
         "hytgraph_sep_lib: INTERFACE target over ${HYTGRAPH_SEP_ROOT}")
 
+    # === PHASE 14 BEGIN ===
+    # ---------------------------------------------------------------------
+    # Vendored utility sources.
+    #
+    # utils.cpp defines GetCachedGraph / CleanupGraphs, called by
+    # utils::traversal::Context<Algo>'s constructor inside framework.cuh.
+    # parser.cpp defines the graph-file parsers GetCachedGraph dispatches
+    # to. to_json.cpp defines JsonWriter used by Engine::SaveToJson.
+    #
+    # These are plain C++ files (std::ifstream, std::stringstream) and
+    # compile with g++, not nvcc.
+    # ---------------------------------------------------------------------
+    add_library(hytgraph_sep_utils STATIC
+        "${HYTGRAPH_SEP_ROOT}/src/utils/utils.cpp"
+        "${HYTGRAPH_SEP_ROOT}/src/utils/parser.cpp"
+        "${HYTGRAPH_SEP_ROOT}/src/utils/to_json.cpp"
+    )
+
+    target_include_directories(hytgraph_sep_utils PRIVATE
+        "${HYTGRAPH_SEP_ROOT}/include"
+    )
+
+    target_link_libraries(hytgraph_sep_utils PUBLIC
+        hytgraph_sep_lib
+    )
+    # === PHASE 14 END ===
+
     # === PHASE 13 BEGIN ===
     # ---------------------------------------------------------------------
     # Phase 13 — sep_adapter sources
@@ -252,8 +279,84 @@ if(HYTGRAPH_WITH_SEP_GRAPH)
         src/sep_adapter/sep_variant_mapper.cpp
     )
 
-    target_link_libraries(hytgraph_runtime PRIVATE hytgraph_sep_lib)
+    target_link_libraries(hytgraph_runtime PRIVATE
+        hytgraph_sep_lib
+        hytgraph_sep_utils
+    )
     # === PHASE 13 END ===
+
+    # === PHASE 14 BEGIN ===
+    # ---------------------------------------------------------------------
+    # Phase 14 — data-movement bridge
+    #
+    # sep_host_graph_adapter.cpp (plain C++) serializes the project CSR
+    # to a temp file in the "market_big" layout, the only format the
+    # vendored ReadGraphMarket_bigdata parser actually implements.
+    #
+    # sep_flags.cpp (plain C++) centralizes every DEFINE_* macro for
+    # flags the vendored code DECLAREs. Keeping them in a TU that does
+    # not include any vendored header avoids duplicate-declaration
+    # errors from gflags.
+    #
+    # hytm_sep_bridge.cpp (plain C++) owns the bridge lifecycle and
+    # delegates the CUDA-only engine work to detail::run_engine(), which
+    # is defined in sep_engine_adapter_impl.cu.
+    #
+    # sep_engine_adapter_impl.cu is the ONLY Phase 14 TU that includes
+    # <framework/framework.cuh>. It must be compiled by nvcc because the
+    # vendored templates reach kernel-launch syntax.
+    #
+    # Private headers under src/sep_adapter/{detail,apps}/ are only
+    # reachable from within this ON block, since only TUs added here
+    # include them.
+    # ---------------------------------------------------------------------
+    target_include_directories(hytgraph_runtime PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_sources(hytgraph_runtime PRIVATE
+        src/sep_adapter/sep_host_graph_adapter.cpp
+        src/sep_adapter/sep_flags.cpp
+    )
+
+    if(CMAKE_CUDA_COMPILER)
+        target_sources(hytgraph_runtime PRIVATE
+            src/sep_adapter/hytm_sep_bridge.cpp
+            src/sep_adapter/sep_engine_adapter_impl.cu
+        )
+
+        set_source_files_properties(
+            src/sep_adapter/sep_engine_adapter_impl.cu
+            PROPERTIES LANGUAGE CUDA
+        )
+
+        set_target_properties(hytgraph_runtime PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+        )
+
+        # The vendored engine uses cudaMalloc / cudaMemcpy / cudaStream_t
+        # (runtime API) and cuGetErrorString (driver API). Link both.
+        target_link_libraries(hytgraph_runtime PRIVATE
+            CUDA::cudart
+            CUDA::cuda_driver
+        )
+
+        # The vendored CUB headers live under deps/cub and conflict with
+        # the system CUB shipped in modern CUDA Toolkits. The macro is
+        # already INTERFACE-defined on hytgraph_sep_lib, but nvcc does
+        # not read INTERFACE defs from PRIVATE-linked libraries at
+        # compile time of the dependent TU, so re-declare it here.
+        target_compile_definitions(hytgraph_runtime PRIVATE
+            THRUST_IGNORE_CUB_VERSION_CHECK
+        )
+    else()
+        message(STATUS
+            "Phase 14: CUDA compiler not available; HyTMSEPBridge and the "
+            "vendored engine runner will not be built. Phase 14 tests are "
+            "skipped.")
+    endif()
+    # === PHASE 14 END ===
 endif()
 
 # === PHASE 13 BEGIN ===
@@ -375,6 +478,30 @@ if(HYTGRAPH_BUILD_TESTS)
         COMMAND hytgraph_sep_adapter_tests
     )
     # === PHASE 13 END ===
+
+    # === PHASE 14 BEGIN ===
+    # --- Phase 14 bridge tests -------------------------------------------
+    # Compiled as PLAIN C++. The test drives HyTMSEPBridge, which is a
+    # plain-C++ class. The CUDA-only work is delegated to a .cu file
+    # inside hytgraph_runtime; the test executable only sees the
+    # project-owned interface. CMake propagates the CUDA::cudart and
+    # CUDA::cuda_driver link flags from hytgraph_runtime's PRIVATE
+    # dependency (CMake does this for static libraries).
+    if(HYTGRAPH_WITH_SEP_GRAPH AND CMAKE_CUDA_COMPILER)
+        add_executable(hytgraph_sep_adapter_bridge_tests
+            tests/sep_adapter_bridge_tests.cpp
+        )
+
+        target_link_libraries(hytgraph_sep_adapter_bridge_tests PRIVATE
+            hytgraph_runtime
+        )
+
+        add_test(
+            NAME sep_adapter_bridge_tests
+            COMMAND hytgraph_sep_adapter_bridge_tests
+        )
+    endif()
+    # === PHASE 14 END ===
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 

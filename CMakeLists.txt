@@ -226,7 +226,49 @@ if(HYTGRAPH_WITH_SEP_GRAPH)
 
     message(STATUS
         "hytgraph_sep_lib: INTERFACE target over ${HYTGRAPH_SEP_ROOT}")
+
+    # === PHASE 13 BEGIN ===
+    # ---------------------------------------------------------------------
+    # Phase 13 — sep_adapter sources
+    #
+    # The sep_adapter module is the single boundary between project code
+    # and the vendored SEP-Graph + Groute tree. Only the .cpp files below
+    # may include vendored headers; every public .hpp in
+    # include/sep_adapter/ is vendored-symbol-free.
+    #
+    # sep_variant_mapper.cpp is the ONLY translation unit that includes
+    # <framework/common.h>. It is compiled only when the vendored tree is
+    # available, because the OFF build has no include path to it.
+    #
+    # sep_engine_adapter.cpp and sep_engine_factory.cpp are empty
+    # placeholders in Phase 13 (the adapter and factory are header-only).
+    # They are compiled so the compiler isolates-parses their headers,
+    # and so the source list does not need to change when Phase 14 adds
+    # real definitions.
+    # ---------------------------------------------------------------------
+    target_sources(hytgraph_runtime PRIVATE
+        src/sep_adapter/sep_engine_adapter.cpp
+        src/sep_adapter/sep_engine_factory.cpp
+        src/sep_adapter/sep_variant_mapper.cpp
+    )
+
+    target_link_libraries(hytgraph_runtime PRIVATE hytgraph_sep_lib)
+    # === PHASE 13 END ===
 endif()
+
+# === PHASE 13 BEGIN ===
+# Numeric macro so that sep_engine_factory.hpp's
+#   #if defined(HYTGRAPH_WITH_SEP_GRAPH) && (HYTGRAPH_WITH_SEP_GRAPH == 0)
+# works. CMake's option() yields ON/OFF; $<BOOL:...> converts to 1/0.
+# PUBLIC so that every consumer of hytgraph_runtime (hytgraph_algorithms,
+# all tests, hytgraph_dummy) sees the same value.
+#
+# Placed outside the if/endif above so that OFF builds also get the
+# numeric definition (as 0).
+# === PHASE 13 END ===
+target_compile_definitions(hytgraph_runtime PUBLIC
+    HYTGRAPH_WITH_SEP_GRAPH=$<BOOL:${HYTGRAPH_WITH_SEP_GRAPH}>
+)
 
 add_executable(hytgraph_dummy
     src/main.cpp
@@ -311,6 +353,28 @@ if(HYTGRAPH_BUILD_TESTS)
             COMMAND hytgraph_sep_link_smoke_test
         )
     endif()
+
+    # === PHASE 13 BEGIN ===
+    # --- Phase 13 sep_adapter tests --------------------------------------
+    # The adapter tests exercise the project-owned interface only. They
+    # do not link hytgraph_sep_lib directly, and they do not include any
+    # vendored header themselves. The vendored translation is exercised
+    # indirectly through the factory, which in ON builds returns a
+    # SEPEngineAdapter whose initialize()/execute_step() bodies are
+    # header-inline.
+    add_executable(hytgraph_sep_adapter_tests
+        tests/sep_adapter_tests.cpp
+    )
+
+    target_link_libraries(hytgraph_sep_adapter_tests PRIVATE
+        hytgraph_runtime
+    )
+
+    add_test(
+        NAME sep_adapter_tests
+        COMMAND hytgraph_sep_adapter_tests
+    )
+    # === PHASE 13 END ===
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 

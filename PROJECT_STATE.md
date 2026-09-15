@@ -2,21 +2,21 @@
 
 ## Current Phase
 
-**Phase 13 — Adapter layer (no data movement)** _(ready to start)_
+**Phase 14 — Data-movement bridge** _(ready to start)_
 
 ## Current Milestone
 
-**M13 — SEP execution driver adapter** _(READY)_
+**M14 — HyTGraph ↔ SEP data-movement bridge** _(READY)_
 
 ## Current Task
 
-Phase 12 is complete. Phase 13 will introduce the `sep_adapter` module as the single boundary between project code and the vendored SEP-Graph + Groute code. Phase 13 implements a thin wrapper around the vendored engine; it performs no data movement.
+Phase 13 is complete and validated. Phase 14 will feed the project-owned CSR graph and active-vertex set into the vendored SEP-Graph engine through `HyTMSEPBridge`, and will introduce the first real engine construction (`sepgraph::engine::Engine<...>`).
 
 ---
 
 # Status
 
-Phases 0–12 are complete and validated in the user's local working tree.
+Phases 0–13 are complete and validated in the user's local working tree.
 
 ---
 
@@ -223,19 +223,81 @@ The scheduler remains a CPU/reference planning abstraction and does not execute 
 
 ---
 
+## Phase 13 — Adapter layer (no data movement)
+
+**Status:** COMPLETE
+
+Introduced the `sep_adapter` module as the single boundary between project code and the vendored SEP-Graph + Groute tree. In Phase 13 the adapter is a thin wrapper with no data movement, no kernel launches, no engine construction, and no partition bridging.
+
+### Deliverables
+
+- `include/sep_adapter/sep_variant.hpp` — project-owned `SEPVariant` enum (8 values), `to_string` / `from_string`, `is_valid_variant`, `kSEPVariantCount`.
+- `include/sep_adapter/sep_execution_result.hpp` — `SEPExecutionResult` and top-level `SEPExecutionState` enum with five states (`OK`, `NEED_INIT`, `INVALID_CONFIG`, `DEFERRED`, `FAILED`); `make_ok` / `make_need_init` / `make_invalid_config` / `make_deferred` / `make_failed` free functions.
+- `include/sep_adapter/sep_execution_driver.hpp` — abstract `SEPExecutionDriver` base class with the five virtual methods from the plan.
+- `include/sep_adapter/sep_variant_mapper.hpp` — project-owned `AlgoVariantDescriptor` struct with three nested enums (`Mode`, `Direction`, `Traversal`), `describe(SEPVariant)` and `from_descriptor(...)`, plus forward declaration of `sepgraph::common::AlgoVariant` and two `detail::` function declarations (`to_vendored`, `from_vendored`).
+- `src/sep_adapter/sep_variant_mapper.cpp` — the ONLY translation unit that includes `<framework/common.h>`.
+- `include/sep_adapter/null_sep_driver.hpp` — `NullSEPDriver` returning `DEFERRED`, with the same lifecycle contract as the real adapter.
+- `include/sep_adapter/sep_engine_adapter.hpp` — templated `SEPEngineAdapter<TValue, TBuffer, TWeight, TAppImpl, UnusedData...>` plus project-owned `SEPAlgorithm` enum.
+- `src/sep_adapter/sep_engine_adapter.cpp` — **empty placeholder** (adapter is header-only in Phase 13).
+- `include/sep_adapter/sep_engine_factory.hpp` — `make_null_driver`, `make_engine_driver<...>`, `make_engine_adapter<...>`, `supports_variant`, `supports_algorithm`.
+- `src/sep_adapter/sep_engine_factory.cpp` — **empty placeholder** (factory is header-only in Phase 13).
+- Root `CMakeLists.txt` — three insertions (sep_adapter sources into `hytgraph_runtime`, `HYTGRAPH_WITH_SEP_GRAPH` numeric macro, test target).
+- `tests/sep_adapter_tests.cpp` — 621 checks, 0 failures.
+
+### Exit Criterion Verification
+
+- All Phase 0–12 tests still pass unchanged ✅ (6/6 in ctest).
+- `sep_adapter_tests` passes (621 checks, 0 failures) ✅
+- Adapter `.hpp` files contain no vendored **symbols** (only `sep_variant_mapper.hpp` forward-declares the vendored type, per deviation D8) ✅
+- Vendored tree byte-identical to the original clone (not touched) ✅
+
+### Deviations from MASTER_PLAN.md §Phase 13 (all build-boundary, none from the paper)
+
+| #   | Plan says                                                                        | Actual                                                                                           | Reason                                                                                                                                                                                                                                                  |
+| --- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | `SEPEngineAdapter<TApp>` — 1 template parameter                                  | `SEPEngineAdapter<TValue, TBuffer, TWeight, TAppImpl, UnusedData...>` — 5                        | Matches vendored `sepgraph::engine::Engine` signature exactly.                                                                                                                                                                                          |
+| D2  | `initialize()` constructs the vendored `Engine<TApp>`                            | `initialize()` returns `OK` and records intent only; no engine construction                      | Engine constructor calls `cudaGetDeviceProperties` and `CreateStream`; Phase 12's build is plain C++. Construction is deferred to Phase 14.                                                                                                             |
+| D3  | Toy app executes one SEP step                                                    | `execute_step()` returns `DEFERRED` (real step in Phase 14)                                      | Vendored engine exposes no single-step API — only `Start()`, which runs to convergence in an internal loop. Phase 13 has no data-movement machinery to feed `Start()`.                                                                                  |
+| D4  | `native_engine_handle()` returns opaque engine pointer                           | Returns `nullptr`                                                                                | Populated in Phase 14 when the engine is actually constructed.                                                                                                                                                                                          |
+| D5  | Plan does not mention an algorithm enum                                          | `SEPAlgorithm` enum added (`IterativeScheme`, `TraversalScheme`)                                 | Vendored `Engine(AlgoType)` requires it. Mirrors `policy::AlgoType` from `framework.cuh`.                                                                                                                                                               |
+| D6  | `sep_engine_adapter.cpp` implied non-trivial                                     | Delivered as empty placeholder                                                                   | Adapter is header-only in Phase 13; `.cpp` exists only to force isolated header parsing and to keep the CMake source list stable for Phase 14.                                                                                                          |
+| D7  | Implies engine construction consumes `AlgoVariant`                               | `SEPVariant` is not consumed by the engine constructor                                           | Vendored `Engine` takes `AlgoType` at construction. `AlgoVariant` is used per-partition inside `Start()`. The `sep_variant_mapper` translation is consumed by Phase 14's bridge.                                                                        |
+| D8  | "No `sepgraph::` or `groute::` symbol outside `third_party/` and the smoke test" | `sep_variant_mapper.hpp` forward-declares `sepgraph::common::AlgoVariant`                        | Forward declaration is not a symbol leak in the plan's sense: it announces a type without exposing any member, base class, or enumerator. The vendored header is included only in `sep_variant_mapper.cpp`.                                             |
+| D9  | "Mapping is bijective with `sepgraph::common::AlgoVariant`"                      | Mapping is **injective**, not bijective                                                          | `AlgoVariant` carries 11 named constants: 8 execution-parameter combinations (with preimages) plus `Exp_Filter`, `Zero_Copy`, `Exp_Compaction` (transfer-engine choices with no preimage). `from_vendored` returns `std::nullopt` for the latter three. |
+| D10 | "`variant_mapper.cpp` is the only file that includes `algo_variants.cuh`"        | Includes `<framework/common.h>` instead                                                          | `algo_variants.cuh` is not standalone-includable; it transitively pulls `hybrid_policy.h`. Consistent with Phase 12's smoke test.                                                                                                                       |
+| D11 | Plan sketch assumes `AlgoVariant` is a value type with a 3-argument constructor  | `AlgoVariant` is a class with named static constants and no such constructor                     | Discovered by inspecting `framework/framework.cuh`. `to_vendored` returns `AV::SYNC_PUSH_DD` by name, not by constructor call.                                                                                                                          |
+| F1  | Factory produces a driver per `(algorithm, variant)` pair                        | Factory is templated on the app type; no non-templated pair-driven factory                       | The vendored engine's template-template `TAppImpl` parameter cannot be selected by a runtime factory. Three functions replace the plan's single factory.                                                                                                |
+| F2  | "Support `HYTGRAPH_WITH_SEP_GRAPH=OFF` build with the null driver"               | Fallback lives at the factory (`make_engine_driver` returns `NullSEPDriver` when the macro is 0) | Single point of control; call sites need not check the macro.                                                                                                                                                                                           |
+| F3  | —                                                                                | `make_engine_adapter<...>` always returns a `SEPEngineAdapter` even in OFF builds                | The concrete type is part of the signature; the adapter is fully functional in Phase 13 without the vendored engine, so this is safe. Phase 14 will re-evaluate.                                                                                        |
+
+### Build-time corrections applied
+
+- `detail::to_vendored` and `detail::from_vendored` were declared `noexcept` in the first delivery of `sep_variant_mapper.hpp`. The vendored `AlgoVariant` constructor is not `noexcept`, and returning `std::optional` is not guaranteed `noexcept` either, so the `noexcept` specifiers were removed from both declarations and definitions.
+- A `static_assert(injective_project_side())` was originally placed in `sep_variant_mapper.cpp`. It called `from_descriptor`, which uses `std::optional` and is not `constexpr` in C++17, so the assert could not be evaluated at compile time. The runtime test in `sep_adapter_tests.cpp` covers the same round trip.
+- The first delivery of `tests/sep_adapter_tests.cpp` used a single-argument `CHECK` macro, which broke on expressions containing commas inside template argument lists (`dynamic_cast<SEPEngineAdapter<int, int, int, DummyApp>*>`). Fixed by making `CHECK` variadic and `CHECK_EQ` strictly two-argument, and by aliasing the adapter type before use.
+- The `AlgoVariant::SYNC_PUSH_DD` / `SYNC_PULL_DD` / `SYNC_PUSH_TD` / `SYNC_PULL_TD` / `ASYNC_PULL_DD` / `ASYNC_PUSH_TD` / `ASYNC_PULL_TD` spellings were marked `VENDOR-CHECK` on first delivery. All seven compiled. **No `VENDOR-CHECK` remains.**
+
+### Notes
+
+- `sep_variant_mapper.cpp` is compiled only when `HYTGRAPH_WITH_SEP_GRAPH=ON`, because it unconditionally includes `<framework/common.h>`. In OFF builds, `detail::to_vendored` and `detail::from_vendored` are declared (via the header) but undefined. Nothing in Phase 13 calls them. Phase 14 must resolve this — either by keeping them behind the same `#if` or by adding a stub implementation in a new file compiled in OFF builds.
+- The `HYTGRAPH_WITH_SEP_GRAPH` CMake option is now propagated to C++ as a numeric macro (`0` or `1`) via `target_compile_definitions(hytgraph_runtime PUBLIC HYTGRAPH_WITH_SEP_GRAPH=$<BOOL:${HYTGRAPH_WITH_SEP_GRAPH}>)`. `sep_engine_factory.hpp`'s `#if ... == 0` guard depends on this.
+- `src/sep_adapter/sep_engine_adapter.cpp` and `src/sep_adapter/sep_engine_factory.cpp` are deliberately empty translation units in Phase 13. They exist only to force isolated header parsing and to keep the CMake source list stable for Phase 14.
+
+---
+
 # Planned Future Phases (not yet started)
 
-| Phase    | Name                             | Status      |
-| -------- | -------------------------------- | ----------- |
-| Phase 13 | Adapter layer (no data movement) | READY       |
-| Phase 14 | Data-movement bridge             | NOT STARTED |
-| Phase 15 | Task combining bridge            | NOT STARTED |
-| Phase 16 | Contribution scheduling bridge   | NOT STARTED |
-| Phase 17 | VCGC read path                   | NOT STARTED |
-| Phase 18 | VCGC refresh                     | NOT STARTED |
-| Phase 19 | Multi-stream runtime             | NOT STARTED |
-| Phase 20 | Full HyTGraph integration        | NOT STARTED |
-| Phase 21 | Evaluation                       | NOT STARTED |
+| Phase    | Name                             | Status       |
+| -------- | -------------------------------- | ------------ |
+| Phase 13 | Adapter layer (no data movement) | **COMPLETE** |
+| Phase 14 | Data-movement bridge             | READY        |
+| Phase 15 | Task combining bridge            | NOT STARTED  |
+| Phase 16 | Contribution scheduling bridge   | NOT STARTED  |
+| Phase 17 | VCGC read path                   | NOT STARTED  |
+| Phase 18 | VCGC refresh                     | NOT STARTED  |
+| Phase 19 | Multi-stream runtime             | NOT STARTED  |
+| Phase 20 | Full HyTGraph integration        | NOT STARTED  |
+| Phase 21 | Evaluation                       | NOT STARTED  |
 
 ---
 
@@ -342,6 +404,35 @@ The `third_party/hytgraph_sep/` directory is read-only from the project's perspe
 
 The vendored `third_party/hytgraph_sep/CMakeLists.txt` is not executed. `hytgraph_sep_lib` is defined in the root `CMakeLists.txt` as an INTERFACE target over the vendored header directories. The smoke test exercises `framework/common.h`, not `framework/algo_variants.cuh` (which is not standalone-includable). These are build-integration details, not algorithmic deviations from the paper.
 
+## 22. SEP Adapter Has No Engine Construction in Phase 13
+
+The `SEPEngineAdapter` in Phase 13 does not construct a vendored `sepgraph::engine::Engine`. The engine's constructor calls `cudaGetDeviceProperties` and `CreateStream`, which would fail on any build environment without CUDA. Construction is deferred to Phase 14.
+
+`execute_step()` returns `DEFERRED` in Phase 13 because the vendored engine exposes no single-step API. The engine's only public execution entry point is `Start()`, which runs the algorithm to convergence in an internal `while (!convergence)` loop. A project-side step scheduler will be introduced in Phase 14.
+
+## 23. SEPVariant ↔ AlgoVariant Is Injective, Not Bijective
+
+The vendored `sepgraph::common::AlgoVariant` carries eleven named constants: eight execution-parameter combinations (`SYNC_PUSH_DD` through `ASYNC_PULL_TD`) and three transfer-engine choices (`Exp_Filter`, `Zero_Copy`, `Exp_Compaction`). The project-owned `SEPVariant` enum covers the eight execution-parameter combinations. The three transfer-engine choices have no preimage; `detail::from_vendored` returns `std::nullopt` for them.
+
+MASTER_PLAN.md §Phase 13 says "mapping is bijective with `sepgraph::common::AlgoVariant`." The correct characterization is **injective**. This is a documentation correction, not a behavioral gap.
+
+## 24. Forward Declaration of a Vendored Type in a Project Header
+
+`include/sep_adapter/sep_variant_mapper.hpp` forward-declares `sepgraph::common::AlgoVariant` so that the two internal `detail::` translation functions can be declared without including any vendored header. This is a technical deviation from the letter of the Phase 12 leak check ("no `sepgraph::` or `groute::` symbol appears outside `third_party/hytgraph_sep/` and the smoke test") but preserves its spirit: no member, base class, or enumerator of the vendored type is visible; the type remains incomplete in every translation unit that does not include `<framework/common.h>`.
+
+If a stricter interpretation is required in a future phase, move the two `detail::` declarations to a private header under `src/sep_adapter/` that is not installed.
+
+## 25. sep_variant_mapper.cpp Is Conditionally Compiled
+
+`src/sep_adapter/sep_variant_mapper.cpp` includes `<framework/common.h>`, whose include path exists only when `HYTGRAPH_WITH_SEP_GRAPH=ON`. It is therefore compiled only in ON builds. In OFF builds, `detail::to_vendored` and `detail::from_vendored` are declared but undefined. Nothing in Phase 13 calls them.
+
+Phase 14 must resolve this. Two options:
+
+1. Keep them behind the same `#if` and never call them in OFF builds.
+2. Add a stub implementation in a new file (`src/sep_adapter/sep_variant_mapper_stub.cpp`) compiled in OFF builds, returning failure / `std::nullopt`.
+
+Option 2 is cleaner.
+
 ---
 
 # Validation Policy
@@ -396,6 +487,18 @@ Phase 12 is complete and validated.
 - Symbol-leakage grep checks are clean.
 - The vendored tree is byte-identical to the original clone.
 
+## Phase 13 Validation
+
+Phase 13 is complete and validated in the user's local working tree.
+
+- `hytgraph_runtime` now includes `src/sep_adapter/*.cpp`.
+- `HYTGRAPH_WITH_SEP_GRAPH` is propagated to C++ as a numeric macro.
+- The full ctest suite passes: 6/6 (`unit_tests`, `algorithm_tests`, `cuda_algorithm_tests`, `sep_graph_link_smoke`, `sep_adapter_tests`, `experiment_runner_smoke`).
+- `sep_adapter_tests` reports **621 checks, 0 failures**.
+- All Phase 0–12 tests still pass unchanged.
+- The vendored tree is byte-identical to the original clone.
+- All seven previously-inferred `AlgoVariant::SYNC_*` / `ASYNC_*` names compiled without adjustment. **No `VENDOR-CHECK` remains in Phase 13 code.**
+
 ## Superseded Work
 
 The earlier draft Phase 12 ("SEP-Graph Foundation" — project-local abstraction layer) is **superseded and discarded**. Its files (`include/sep/sep_*.hpp`) are no longer part of the architecture. If they exist in the local tree, they should be removed.
@@ -404,7 +507,7 @@ The earlier draft Phase 12 ("SEP-Graph Foundation" — project-local abstraction
 
 # Current Milestone
 
-    M13 — SEP execution driver adapter
+    M14 — HyTGraph ↔ SEP data-movement bridge
 
 Status:
 
@@ -414,7 +517,7 @@ Status:
 
 # Next Milestone
 
-    M14 — HyTGraph ↔ SEP data-movement bridge
+    M15 — Task Combining with SEP worklists
 
 Status:
 
@@ -424,26 +527,41 @@ Status:
 
 # NEXT TASK
 
-**Next task:** Phase 13 — Adapter layer (no data movement).
+**Next task:** Phase 14 — Data-movement bridge.
 
-Phase 13 introduces the `sep_adapter` module as the single boundary between project code and vendored code. It implements a thin wrapper around the vendored engine. No data movement, no kernel launches, no partition bridging.
+Phase 14 feeds the project-owned CSR graph and active-vertex set into the vendored SEP-Graph engine through a project-owned bridge, and introduces the first real engine construction.
 
-Phase 13 deliverables:
+Phase 14 deliverables:
 
-1. `include/sep_adapter/sep_variant.hpp` — project-owned `SEPVariant` enum.
-2. `include/sep_adapter/sep_execution_result.hpp` — `SEPExecutionResult` with `State { OK, NEED_INIT, INVALID_CONFIG, DEFERRED, FAILED }`.
-3. `include/sep_adapter/sep_execution_driver.hpp` — abstract `SEPExecutionDriver` base class.
-4. `include/sep_adapter/sep_variant_mapper.hpp` + `src/sep_adapter/sep_variant_mapper.cpp` — bijective mapping between project enum and `sepgraph::common::AlgoVariant`. The **only** file that may include `algo_variants.cuh`.
-5. `include/sep_adapter/sep_engine_adapter.hpp` + `src/sep_adapter/sep_engine_adapter.cpp` — templated `SEPEngineAdapter<TApp>` with pimpl.
-6. `include/sep_adapter/sep_engine_factory.hpp` + `src/sep_adapter/sep_engine_factory.cpp` — factory producing a driver per `(algorithm, variant)` pair.
-7. `include/sep_adapter/null_sep_driver.hpp` — null driver returning `DEFERRED`, allows testing the abstraction without vendored code.
+1. `include/sep_adapter/sep_algorithm_mapper.hpp` + `src/sep_adapter/sep_algorithm_mapper.cpp` — project-owned mapping from `SEPAlgorithm` to the vendored `policy::AlgoType`.
+2. `include/sep_adapter/sep_graph_datum_adapter.hpp` + `src/sep_adapter/sep_graph_datum_adapter.cpp` — build a `sepgraph::graphs::GraphDatum` from a project-owned `CSRGraph` plus an active-vertex set. pimpl so no vendored symbol leaks into public headers.
+3. `include/sep_adapter/hytm_sep_bridge.hpp` + `src/sep_adapter/hytm_sep_bridge.cpp` — `HyTMSEPBridge` accepting a `SEPExecutionDriver&` and a `CSRGraph&`; `execute_partition(active_vertices, engine)` drives one iteration.
+4. `src/sep_adapter/sep_engine_adapter_impl.cpp` (new, CUDA-enabled) — the actual engine construction. Either a `.cpp` compiled with CUDA support, or a `.cu` file. **This file will include `<framework/framework.cuh>`.**
+5. Update `CMakeLists.txt` to add the new sources, and to compile `sep_engine_adapter_impl.cpp` as a CUDA source (or as a plain C++ source if the header is `.cuh`-compatible without kernel launches — this is a decision to make during Phase 14, not now).
+6. Update `tests/sep_adapter_tests.cpp` to add a Phase 14 test section, or add a new `tests/sep_adapter_bridge_tests.cpp` if the bridge needs its own test target.
+7. Correct the two Phase 13 documentation bugs: the "bijective" comment in `sep_variant_mapper.hpp`; the deferred OFF-build stub decision (Known Issue #25).
 
-Exit criteria for Phase 13:
+**Prerequisite for Phase 14 (must be resolved before writing code):**
 
-- Toy app (4 vertices) executes one SEP step through the adapter.
-- Adapter `.hpp` files contain no vendored symbols.
-- All Phase 0–12 tests still pass.
+- Read `framework/graph_datum.cuh` and confirm the `GraphDatum` constructor signature and the semantics of `m_current_round`, `m_wl_array_in_seg`, and `subgraphedges`.
+- Read `framework/variants/api.cuh` and `framework/variants/driver.cuh` to understand `RunSyncPushDDB` and the other driver functions the engine calls internally.
+- Decide whether Phase 14 builds `sep_engine_adapter_impl.cpp` as C++ or CUDA. The header `framework.cuh` uses `<<<>>>` syntax internally (kernel launches) in template bodies that are only instantiated when called; whether a `.cpp` can include it without nvcc depends on whether the template bodies reach `kernel::*` calls before instantiation. **Test this before writing the bridge.**
 
-Do **not** add data movement in Phase 13. Do **not** modify the vendored tree. Do **not** edit any file outside `include/sep_adapter/` and `src/sep_adapter/` except the root `CMakeLists.txt` (to wire the new sources into an existing or new target).
+Exit criteria for Phase 14:
 
-**Time-box: 2 days.**
+- One out-of-core iteration runs through the vendored engine for PageRank and SSSP.
+- All three transfer engines give identical results on a small graph.
+- No `sepgraph::` symbol is visible outside `src/sep_adapter/` and the vendored tree itself.
+- All Phase 0–13 tests still pass.
+
+**Time-box: 3–4 days.** This is the first phase with real CUDA dependencies. Expect at least one integration issue with the vendored headers.
+
+---
+
+# Phase 14 Open Questions (to resolve before starting)
+
+1. **Does `framework/framework.cuh` compile as plain C++?** Phase 12's smoke test verified that `framework/common.h` compiles as plain C++. `framework.cuh` is a much larger header and includes `framework/variants/driver.cuh`, which contains kernel-launch syntax. Answer by attempting to include it from a throwaway `.cpp`; if it fails, Phase 14 must introduce a `.cu` file for engine construction.
+
+2. **Which apps does Phase 14 target first?** MASTER_PLAN.md §5 lists PageRank, SSSP, BFS, CC. The vendored SEP-Graph repo has `apps/pr`, `apps/sssp`, `apps/bfs`, `apps/cc` (not copied in Phase 12). Phase 14 can either implement project-owned apps that match SEP-Graph's `TAppImpl` contract, or copy the vendored app headers into `third_party/hytgraph_sep/` as an additive operation. The plan does not specify. **Recommendation: implement project-owned apps under `include/sep_adapter/apps/`** — the paper's algorithms are simple enough and the boundary rule favors project-owned code.
+
+3. **Where does the graph datum get built?** Two possibilities: (a) `sep_graph_datum_adapter.cpp` builds it in one shot; (b) the bridge builds it incrementally per partition. MASTER_PLAN.md §Phase 14 says "Reuse the engine across partitions; only swap the GraphDatum input." This implies (a) builds the datum once, and the bridge reloads it per partition.

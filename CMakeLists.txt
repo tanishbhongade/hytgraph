@@ -130,6 +130,104 @@ else()
     )
 endif()
 
+# ---------------------------------------------------------------------------
+# Phase 12 — Vendored HyTGraph SEP-Graph + Groute
+#
+# The vendored tree at third_party/hytgraph_sep/ is read-only. Its own
+# top-level CMakeLists.txt is the original SEP-Graph project file (builds
+# hybrid_pr/bfs/sssp/cc samples against src/ and samples/ trees that we did
+# not copy) and is intentionally NOT executed.
+#
+# The vendored SEP-Graph headers do require gflags headers. deps/gflags is a
+# self-contained source subproject; we configure it here with its internal
+# CTest registrations suppressed, so its 51 tests do not leak into our suite.
+#
+# All project-side access to the vendored library goes through
+# include/sep_adapter/ (Phase 13). The only exception is the link smoke test
+# in tests/integration/.
+# ---------------------------------------------------------------------------
+option(HYTGRAPH_WITH_SEP_GRAPH
+       "Build with vendored HyTGraph SEP-Graph + Groute" ON)
+
+if(HYTGRAPH_WITH_SEP_GRAPH)
+    set(HYTGRAPH_SEP_ROOT
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/hytgraph_sep")
+
+    if(NOT EXISTS "${HYTGRAPH_SEP_ROOT}/include/framework/algo_variants.cuh")
+        message(FATAL_ERROR
+            "HYTGRAPH_WITH_SEP_GRAPH=ON but the vendored SEP-Graph tree "
+            "is missing or incomplete at ${HYTGRAPH_SEP_ROOT}. "
+            "Expected ${HYTGRAPH_SEP_ROOT}/include/framework/algo_variants.cuh.")
+    endif()
+
+    # ---------------------------------------------------------------------
+    # Vendored gflags
+    #
+    # Configure it as a static library, tests off. We only need its headers
+    # and, once Phase 13 arrives, its symbols. BUILD_TESTING=OFF around the
+    # add_subdirectory call is what suppresses gflags' internal ctest
+    # registrations (unittest, version-1, helpxml, flagfile.*, ...).
+    # ---------------------------------------------------------------------
+    set(GFLAGS_BUILD_TESTING              OFF CACHE BOOL "" FORCE)
+    set(GFLAGS_BUILD_gflags_LIB           ON  CACHE BOOL "" FORCE)
+    set(GFLAGS_BUILD_gflags_nothreads_LIB OFF CACHE BOOL "" FORCE)
+    set(GFLAGS_BUILD_STATIC_LIBS          ON  CACHE BOOL "" FORCE)
+    set(GFLAGS_BUILD_SHARED_LIBS          OFF CACHE BOOL "" FORCE)
+    set(GFLAGS_INSTALL_HEADERS            OFF CACHE BOOL "" FORCE)
+    set(GFLAGS_INSTALL_SHARED_LIBS        OFF CACHE BOOL "" FORCE)
+    set(GFLAGS_INSTALL_STATIC_LIBS        OFF CACHE BOOL "" FORCE)
+
+    set(_HYTGRAPH_SAVED_BUILD_TESTING "${BUILD_TESTING}")
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+
+    add_subdirectory(
+        "${HYTGRAPH_SEP_ROOT}/deps/gflags"
+        "${CMAKE_CURRENT_BINARY_DIR}/hytgraph_sep_gflags_build"
+        EXCLUDE_FROM_ALL)
+
+    set(BUILD_TESTING "${_HYTGRAPH_SAVED_BUILD_TESTING}" CACHE BOOL "" FORCE)
+
+    if(TARGET gflags_static)
+        set(_HYTGRAPH_SEP_GFLAGS_TARGET gflags_static)
+    elseif(TARGET gflags)
+        set(_HYTGRAPH_SEP_GFLAGS_TARGET gflags)
+    else()
+        message(FATAL_ERROR
+            "hytgraph_sep: vendored gflags did not define a "
+            "'gflags' or 'gflags_static' target.")
+    endif()
+
+    # ---------------------------------------------------------------------
+    # hytgraph_sep_lib
+    #
+    # INTERFACE. Header-only. Exposes:
+    #   - vendored SEP-Graph / Groute include root
+    #   - vendored nlohmann/json include root
+    #   - generated gflags include dir (gflags.h is configure_file'd there)
+    #
+    # Links gflags so that a downstream TU (the smoke test) can resolve
+    # gflags symbols if it ever needs them. In Phase 12 nothing does, so the
+    # static archive is not actually pulled in at link time.
+    # ---------------------------------------------------------------------
+    add_library(hytgraph_sep_lib INTERFACE)
+
+    target_include_directories(hytgraph_sep_lib SYSTEM INTERFACE
+        "${HYTGRAPH_SEP_ROOT}/include"
+        "${HYTGRAPH_SEP_ROOT}/deps/json"
+        "${CMAKE_CURRENT_BINARY_DIR}/hytgraph_sep_gflags_build/include")
+
+    target_link_libraries(hytgraph_sep_lib INTERFACE
+        ${_HYTGRAPH_SEP_GFLAGS_TARGET})
+
+    # The vendored CUB version does not match the CUDA toolkit's Thrust
+    # expectation; the original SEP-Graph build silences that check.
+    target_compile_definitions(hytgraph_sep_lib INTERFACE
+        THRUST_IGNORE_CUB_VERSION_CHECK)
+
+    message(STATUS
+        "hytgraph_sep_lib: INTERFACE target over ${HYTGRAPH_SEP_ROOT}")
+endif()
+
 add_executable(hytgraph_dummy
     src/main.cpp
 )
@@ -190,6 +288,27 @@ if(HYTGRAPH_BUILD_TESTS)
         set_tests_properties(
             cuda_algorithm_tests
             PROPERTIES SKIP_RETURN_CODE 77
+        )
+    endif()
+
+    # --- Phase 12 link smoke test ----------------------------------------
+    # Compiled as PLAIN C++. The vendored header we exercise,
+    # framework/common.h, is a pure-C++ header. We link hytgraph_sep_lib
+    # (which transitively brings gflags and its headers) but we do not
+    # need nvcc for this particular test.
+    if(HYTGRAPH_WITH_SEP_GRAPH)
+
+        add_executable(hytgraph_sep_link_smoke_test
+            tests/integration/sep_graph_link_smoke_test.cpp
+        )
+
+        target_link_libraries(hytgraph_sep_link_smoke_test PRIVATE
+            hytgraph_sep_lib
+        )
+
+        add_test(
+            NAME sep_graph_link_smoke
+            COMMAND hytgraph_sep_link_smoke_test
         )
     endif()
 
